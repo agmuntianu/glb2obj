@@ -1328,6 +1328,9 @@ document.addEventListener('drop', (e) => { e.preventDefault(); document.body.cla
 colorsChk.addEventListener('change', () => { /* applies to the next conversion */ });
 new ResizeObserver(() => view.render()).observe(document.querySelector('section.view'));
 view.render();
+
+// Debug handle so manual/automated checks can drive the viewer. Harmless in normal use.
+window.glb2obj = { preview: view, items: () => items, convert: convertToObj };
 </script>
 </body>
 </html>

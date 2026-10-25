@@ -1,77 +1,78 @@
 # glb2obj
 
-**One file: `glb2obj.html`. Double-click it.** Converts `.glb` / `.gltf` (point clouds and
-triangle meshes) to `.obj`, entirely in the browser — no server, no upload, no install,
-no dependencies.
+**One HTML file. Double-click it, drop a `.glb`, get a `.obj`.** No install, no server, no
+upload, no dependencies — the whole converter and a 3D preview live in `glb2obj.html`
+(56 KB) and run in whatever browser you already have.
+
+![glb2obj previewing the sample mouse model](preview.png)
+
+> **Vibecoded.** Design, feature choices and every judgement call (what to keep, what to
+> drop, how it looks) were made by me; the code was written by an AI coding agent
+> ([pi](https://github.com/badlogic/pi-mono)) driving the iterations, the tests and the
+> browser checks.
+
+## Use it
+
+1. Double-click **`glb2obj.html`** — it opens in your browser. That is the entire app.
+2. Drag one or more `.glb` / `.gltf` files onto the page. They convert immediately and each
+   row gets **Save .obj**.
+
+Try it with [`sample-mouse.glb`](sample-mouse.glb) in this repo (4.9 MB, generated in
+ComfyUI): drop it on the page and the row reads
 
 ```
-open glb2obj.html          # or double-click it in Explorer
-drop a .glb / .gltf        # converts immediately, shows a 3D preview, then Save .obj
+137,505 verts · 286,252 faces · 266 ms
 ```
 
-Drag several files at once. A `.gltf` that references external buffers must be dropped
-**together with** its `.bin` file(s).
+Click **Preview** for the view in the screenshot above — orbit with the mouse, wheel to
+zoom, then hit `W` (wireframe), `S` (solid), `P` (points) or `F` (refit). **Save .obj**
+writes a 10.4 MB file: 137,505 `v` lines and 286,252 `f v/vn` lines, Y-up, no axis flip.
 
-## What it does
+If a `.gltf` references external buffers, drop it **together with** its `.bin` file(s).
 
-| Input | OBJ output |
+## What comes out
+
+| Your file has | The OBJ gets |
 | --- | --- |
-| point-cloud primitives (POSITION, no indices) | `v` lines |
-| indexed meshes | `v` + `f` lines (1-based, global index offset is correct across primitives) |
-| `NORMAL` | `vn` lines in world space, faces written as `f v/vn` |
-| `COLOR_0` | `vc` lines (Blender vertex-colour extension); untick *vertex colors* to skip |
-| node hierarchy | full world transforms applied (translation / rotation / scale, cycles guarded) |
-| all accessor types | int8/uint8/int16/uint16/uint32/float32, `normalized`, dense **and interleaved** (`byteStride`) |
-| `KHR_draco_mesh_compression_ext` | decoded (Draco decoder is fetched once, see below) |
+| points / point cloud | `v` lines |
+| triangle meshes (indexed or not) | `f` lines, correct global index offsets |
+| `NORMAL` | `vn` lines, transformed into world space |
+| `COLOR_0` | `vc` lines (Blender's vertex-colour extension) — untick *vertex colors* to skip |
+| node hierarchy | all transforms baked into the vertex positions |
+| `KHR_draco_mesh_compression_ext` | decoded first (see below) |
 
-## Preview
+Textures and materials are not exported (no `.mtl`), morph targets and skinning are not
+animated, and no axis flip is applied. When your model has UVs or skinning the status line
+says so instead of failing silently, so you always know what you lost.
 
-WebGL, hand-written, no three.js. **Solid** (uses the model's normals; generates them for
-preview when the file has none), **Wire** (edges decimated on dense meshes), **Points**
-(adaptive sprite size, vertex colours preserved). Ground grid + RGB axes, fit to bounds.
+## Draco files (only if your model is compressed)
 
-* drag = orbit · wheel = zoom · right-drag / Shift-drag = pan
-* `F` fit · `W` wire · `S` solid · `P` points
+Draco needs Google's WASM decoder, which is deliberately not inlined (1.4 MB of base64 for a
+feature most files never use). On the first Draco model the page fetches it from Google's
+CDN. To work fully offline: drop `draco_decoder_gltf.js` and `draco_decoder_gltf.wasm`
+onto the page once, then retry the model.
 
-## Draco
+## Under the hood (there isn't much)
 
-Draco-compressed models need Google's WASM decoder, which is deliberately **not** inlined
-(1.4 MB of base64 for a feature most files never use). On the first Draco model the page
-loads `draco_decoder_gltf.js` + `.wasm` from `https://www.gstatic.com/draco/...`.
+- Parse + convert is one plain-JS block, no libraries, time-sliced so a 100 MB mesh never
+  freezes the tab and stays cancellable.
+- OBJ text is emitted in ≤1 MB chunks instead of one giant string — that 10.4 MB output
+  above is 74 chunks, and memory stays bounded.
+- Preview is hand-written WebGL (no three.js — it has to stay one file).
 
-Offline: save `draco_decoder_gltf.js` and `draco_decoder_gltf.wasm` next to `glb2obj.html`,
-or drop both onto the page, then retry.
-
-## Deliberately not handled
-
-Textures/UVs are dropped (a warning states how many primitives had UVs), morph targets are
-dropped, skinning/bones export the bind pose, materials/`mtl` are not written, and no
-axis flip is applied (glTF is Y-up; the OBJ comes out Y-up). The status line always tells
-you what was left behind instead of failing silently.
-
-## Limits
-
-512 MB input, bounded memory: OBJ text is emitted in ≤1 MB chunks (never one giant
-`join`), conversion runs as a generator time-sliced at ~24 ms/frame so the tab stays
-responsive and cancellable on a 100 MB single-primitive mesh. Preview is capped and
-decimated at 4 M vertices / 1.5 M triangles — the OBJ is never decimated.
-
-## Development
+### Hacking on it
 
 ```
-node test.mjs                      # 21 checks, extracts the CORE block from the HTML
-node dev/make-fixtures.mjs         # regenerates fixtures/ (cube, point cloud, interleaved)
-node dev/make-draco-fixture.mjs    # regenerates fixtures/draco-bunny.glb (needs `npm i draco3dgltf`)
+node dev/test.mjs        # 21 checks, runs in Node, no dev dependencies
 ```
 
-`test.mjs` is a dev harness only — the product has no dev dependencies. It is load-bearing:
+The harness extracts the `CORE` block straight out of the HTML, so the browser code and the
+tested code are literally the same bytes. It includes a golden check that the OBJ is
+**byte-identical** to the old Node converter on `sample-mouse.glb`, an interleaved-`byteStride`
+regression, and a real Draco decode. `dev/make-fixtures.mjs` builds the small test fixtures
+on demand (they are not committed); `dev/make-draco-fixture.mjs` regenerates
+`dev/fixtures/draco-bunny.glb`, which is committed because it needs a real Draco encoder.
 
-* **Golden check**: output must be byte-identical to the pre-rewrite Node converter
-  (commit `71d8866`, read out of git history) on the 5 MB real-world model.
-* **Interleaved regression**: a `byteStride` test that fails if stride handling breaks.
-* **Generator granularity**: asserts a single 100 k-point primitive still yields ≥10 times.
-* **Draco**: real decoder decode of 34,834 verts / 69,451 faces, asserting decoded normals
-  are unit length (catches quantization mishandling).
+## License
 
-Anything inside `/* ==== CORE BEGIN ==== */ ... CORE END ==== */` must stay free of DOM and
-Node APIs — that is what lets the same bytes run in the browser and under Node.
+MIT — see [LICENSE](LICENSE).

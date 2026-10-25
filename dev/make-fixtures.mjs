@@ -10,8 +10,8 @@
 import fs from 'fs';
 import path from 'path';
 
-const root = path.join(path.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1')), '..');
-const outDir = path.join(root, 'fixtures');
+const here = path.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1'));
+const outDir = path.join(here, 'fixtures');
 fs.mkdirSync(outDir, { recursive: true });
 
 function buildGlb(gltf, bin) {

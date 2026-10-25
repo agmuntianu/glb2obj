@@ -1,9 +1,10 @@
 // Dev-only regression harness. The product is glb2obj.html; this file extracts
 // the CORE block out of that HTML and runs it under Node.
-//   node test.mjs
+//   node dev/test.mjs
 //
-// Test 9 compares output byte-for-byte against the pre-rewrite Node converter
-// (commit 71d8866), so the browser port cannot silently change results.
+// Test 9 compares output byte-for-byte against the pre-rewrite Node converter (the
+// repo's first commit, which still contains lib/glb2obj.js), so the browser port
+// cannot silently change results. It skips if that history was squashed away.
 
 import fs from 'fs';
 import path from 'path';
@@ -12,7 +13,7 @@ import { createRequire } from 'module';
 import { execFileSync } from 'child_process';
 
 const here = path.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1'));
-const html = fs.readFileSync(path.join(here, 'glb2obj.html'), 'utf8');
+const html = fs.readFileSync(path.join(here, '..', 'glb2obj.html'), 'utf8');
 const block = html.match(/\/\* ==== CORE BEGIN ==== \*\/([\s\S]*?)\/\* ==== CORE END ==== \*\//);
 if (!block) throw new Error('CORE block markers not found in glb2obj.html');
 const { convertToObj, convertGEN, GlbError, setDracoModule, peekExtensions } = new Function(
@@ -20,6 +21,17 @@ const { convertToObj, convertGEN, GlbError, setDracoModule, peekExtensions } = n
 )();
 const convert = (i, o) => convertToObj(i, Object.assign({ collectObj: true }, o)).obj;
 const convertFull = (i, o) => convertToObj(i, Object.assign({ collectObj: true }, o));
+
+// Fixtures are generated, not committed — except draco-bunny.glb, which needs a real
+// Draco encoder to build and would otherwise leave the Draco path untested. Build any
+// missing generated fixture on demand so a fresh clone can still run the suite.
+const fixtureDir = path.join(here, 'fixtures');
+for (const f of ['colored-cube.glb', 'pointcloud.glb', 'interleaved.gltf', 'interleaved.bin']) {
+  if (!fs.existsSync(path.join(fixtureDir, f))) {
+    execFileSync(process.execPath, [path.join(here, 'make-fixtures.mjs')], { stdio: 'ignore' });
+    break;
+  }
+}
 
 function buildGlb(gltf, bin) {
   const jsonBuf = Buffer.from(JSON.stringify(gltf));
@@ -244,7 +256,7 @@ const faceVerts = (line) => line.slice(2).split(' ').map((t) => parseInt(t.split
 
 // 9. GOLDEN: real GLB must match the pre-rewrite Node converter byte-for-byte
 {
-  const file = path.join(here, 'ComfyUI_00002_.glb');
+  const file = path.join(here, '..', 'sample-mouse.glb');
   if (!fs.existsSync(file)) { console.log('real GLB skipped (file missing)'); }
   else {
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'glb2obj-golden-'));
@@ -252,9 +264,10 @@ const faceVerts = (line) => line.slice(2).split(' ').map((t) => parseInt(t.split
     fs.mkdirSync(oldDir);
     let oldLib;
     try {
-      oldLib = execFileSync('git', ['show', '71d8866:lib/glb2obj.js'], { cwd: here, maxBuffer: 1 << 26 });
+      const base = execFileSync('git', ['rev-list', '--max-parents=0', 'HEAD'], { cwd: here }).toString().trim().split('\n')[0];
+      oldLib = execFileSync('git', ['show', base + ':lib/glb2obj.js'], { cwd: here, maxBuffer: 1 << 26 });
     } catch (e) {
-      console.log('real GLB golden check skipped (baseline commit 71d8866 not reachable in this clone)');
+      console.log('real GLB golden check skipped (pre-rewrite converter not reachable in this clone)');
       fs.rmSync(tmp, { recursive: true, force: true });
       oldLib = null;
     }
@@ -544,7 +557,7 @@ const faceVerts = (line) => line.slice(2).split(' ').map((t) => parseInt(t.split
     // real decoder if draco3dgltf happens to be installed (dev-only, optional)
     let draco = null;
     const req = createRequire(import.meta.url);
-    for (const p of ['draco3dgltf', path.join(here, 'node_modules', 'draco3dgltf'), 'C:/Users/agmun/AppData/Local/Temp/dracotest/node_modules/draco3dgltf']) {
+    for (const p of ['draco3dgltf', path.join(here, '..', 'node_modules', 'draco3dgltf'), path.join(here, 'node_modules', 'draco3dgltf'), 'C:/Users/agmun/AppData/Local/Temp/dracotest/node_modules/draco3dgltf']) {
       try { draco = req(p); break; } catch (e) { /* optional */ }
     }
     if (!draco) { console.log('draco decode skipped (draco3dgltf not installed) - error path only'); }

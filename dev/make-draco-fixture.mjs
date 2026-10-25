@@ -10,7 +10,8 @@ import path from 'path';
 import { createRequire } from 'module';
 
 const require = createRequire(import.meta.url);
-const root = path.join(path.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1')), '..');
+const here = path.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1'));
+const root = path.join(here, '..');
 
 // Candidate locations for the draco npm package (dev machine convenience).
 const DRACO_PKG = [
@@ -108,7 +109,7 @@ out.writeUInt32LE(binPadded.length, o);
 out.writeUInt32LE(0x004e4942, o + 4);
 binPadded.copy(out, o + 8);
 
-const dest = path.join(root, 'fixtures', 'draco-bunny.glb');
+const dest = path.join(here, 'fixtures', 'draco-bunny.glb');
 fs.mkdirSync(path.dirname(dest), { recursive: true });
 fs.writeFileSync(dest, out);
 console.log('wrote ' + dest + ' (' + out.length + ' bytes) from ' + drcPath);

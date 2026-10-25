@@ -3,3 +3,5 @@ node_modules/
 shot-*.png
 build/
 *.exe
+dev/fixtures/*
+!dev/fixtures/draco-bunny.glb
