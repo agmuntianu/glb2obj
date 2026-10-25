@@ -5,24 +5,114 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>GLB / glTF → OBJ</title>
 <style>
-  body { font: 15px system-ui, sans-serif; background: #0f1117; color: #e6e9f0; margin: 0; padding: 24px; }
-  #drop { border: 2px dashed #2a3040; border-radius: 10px; padding: 40px; text-align: center; }
-  #log { font: 13px ui-monospace, monospace; white-space: pre-wrap; margin-top: 16px; }
+  :root {
+    --bg: #0e1116; --panel: #161b23; --panel2: #1c2330; --border: #29313f;
+    --text: #e6e9f0; --dim: #8a93a6; --accent: #4f8cff; --ok: #3ecf8e; --err: #ff6b6b;
+    --warn: #ffb454;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 14px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+    display: grid; grid-template-rows: auto 1fr; grid-template-columns: 360px 1fr;
+    grid-template-areas: "head head" "side view"; overflow: hidden;
+  }
+  header {
+    grid-area: head; display: flex; align-items: center; gap: 16px;
+    padding: 10px 16px; border-bottom: 1px solid var(--border); background: var(--panel);
+  }
+  header h1 { font-size: 15px; margin: 0; font-weight: 600; letter-spacing: .01em; }
+  header .sub { color: var(--dim); font-size: 12px; }
+  header .spacer { flex: 1; }
+  label.chk { display: flex; align-items: center; gap: 7px; color: var(--dim); font-size: 13px; cursor: pointer; }
+  input[type=checkbox] { accent-color: var(--accent); }
+
+  aside { grid-area: side; border-right: 1px solid var(--border); background: var(--panel); display: flex; flex-direction: column; min-height: 0; }
+  #drop {
+    margin: 14px; padding: 22px 14px; border: 2px dashed var(--border); border-radius: 10px;
+    text-align: center; color: var(--dim); cursor: pointer; transition: border-color .15s, background .15s;
+    flex: none;
+  }
+  #drop:hover, body.over #drop { border-color: var(--accent); background: rgba(79,140,255,.07); color: var(--text); }
+  #drop .big { color: var(--text); font-size: 14px; }
+  #drop .small { font-size: 12px; margin-top: 3px; }
+
+  #queue { list-style: none; margin: 0; padding: 0 10px 10px; overflow-y: auto; flex: 1; }
+  .tools { display: flex; justify-content: flex-end; padding: 0 14px 6px; }
+  .tools button { font: inherit; font-size: 12px; padding: 4px 9px; border-radius: 6px; border: 1px solid var(--border); background: transparent; color: var(--dim); cursor: pointer; }
+  .tools button:hover { color: var(--text); border-color: var(--accent); }
+  .item { border: 1px solid var(--border); border-radius: 8px; background: var(--panel2); padding: 9px 11px; margin-bottom: 8px; }
+  .item.active { border-color: var(--accent); }
+  .item .name { display: flex; align-items: baseline; gap: 8px; }
+  .item .name b { font-weight: 600; font-size: 13px; word-break: break-all; }
+  .item .size { color: var(--dim); font-size: 11px; flex: none; }
+  .item .stat { color: var(--dim); font-size: 12px; margin-top: 3px; }
+  .item .stat.err { color: var(--err); }
+  .item .stat.warn { color: var(--warn); }
+  .bar { height: 4px; border-radius: 2px; background: #0c1017; margin-top: 7px; overflow: hidden; }
+  .bar > i { display: block; height: 100%; width: 0; background: var(--accent); transition: width .12s; }
+  .acts { display: flex; gap: 6px; margin-top: 8px; }
+  .acts button {
+    font: inherit; font-size: 12px; padding: 5px 10px; border-radius: 6px; cursor: pointer;
+    border: 1px solid var(--border); background: #101621; color: var(--text);
+  }
+  .acts button:hover { border-color: var(--accent); }
+  .acts button.primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
+  .acts button:disabled { opacity: .4; cursor: default; }
+
+  section.view { grid-area: view; position: relative; min-width: 0; background: #0a0d12; }
+  #gl { display: block; width: 100%; height: 100%; }
+  .modes { position: absolute; top: 12px; left: 12px; display: flex; gap: 4px; background: rgba(14,17,22,.75); border: 1px solid var(--border); border-radius: 8px; padding: 4px; backdrop-filter: blur(6px); }
+  .modes button { font: inherit; font-size: 12px; padding: 5px 11px; border-radius: 5px; border: 0; background: transparent; color: var(--dim); cursor: pointer; }
+  .modes button.on { background: var(--accent); color: #fff; font-weight: 600; }
+  .hud { position: absolute; bottom: 12px; left: 12px; color: var(--dim); font-size: 11.5px; line-height: 1.45;
+        background: rgba(14,17,22,.75); border: 1px solid var(--border); border-radius: 8px; padding: 7px 10px; max-width: 60%; }
+  .hud b { color: var(--text); font-weight: 600; }
+  .hint { position: absolute; bottom: 12px; right: 12px; color: #5c6577; font-size: 11px; text-align: right; }
+  .empty { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: #4c5666; font-size: 13px; pointer-events: none; }
+  .empty[hidden], .bar[hidden], .acts button[hidden] { display: none; }
 </style>
 </head>
 <body>
-<h1>GLB / glTF → OBJ</h1>
-<div id="drop">Drop .glb / .gltf files here</div>
-<label><input type="checkbox" id="colors" checked> vertex colors (vc)</label>
-<div id="log"></div>
+<header>
+  <h1>GLB / glTF → OBJ</h1>
+  <span class="sub">local converter — no server, no upload</span>
+  <span class="spacer"></span>
+  <label class="chk"><input type="checkbox" id="colors" checked> vertex colors <code>vc</code></label>
+</header>
+
+<aside>
+  <div id="drop">
+    <div class="big">Drop .glb / .gltf files</div>
+    <div class="small">or click to browse · drag a .gltf together with its .bin</div>
+  </div>
+  <div class="tools"><button id="clear">Clear list</button></div>
+  <ul id="queue"></ul>
+</aside>
+
+<section class="view">
+  <canvas id="gl"></canvas>
+  <div class="modes" id="modes">
+    <button data-mode="solid" class="on">Solid</button>
+    <button data-mode="wire">Wire</button>
+    <button data-mode="points">Points</button>
+  </div>
+  <div class="hud" id="hud" hidden></div>
+  <div class="hint" id="hint">drag = orbit · wheel = zoom · <b>F</b> fit · <b>W</b>/<b>S</b>/<b>P</b> mode</div>
+  <div class="empty" id="empty">nothing loaded yet</div>
+</section>
 
 <script>
 /* ==== CORE BEGIN ==== */
-// GLB / glTF -> OBJ. No deps, no Node, no DOM: Uint8Array / DataView only,
-// so this exact block also runs in Node for tests.
+// GLB / glTF -> OBJ. Pure typed arrays: no Node, no DOM, no deps, so this exact
+// block also runs under Node for the regression harness (test.mjs).
 //
 // GLB: 12-byte header, JSON chunk (0x4E4F534A), BIN chunk (0x004E4942).
-// Output: point clouds -> v ; indexed meshes -> v + f ; NORMAL -> vn ; COLOR_0 -> vc.
+// OBJ: point clouds -> v ; indexed meshes -> v + f ; NORMAL -> vn ; COLOR_0 -> vc.
+//
+// convertOBJ() returns a generator: each next() finishes work and yields a
+// progress event, so the UI can paint/cancel without freezing the tab.
 
 const GLB_MAGIC = 0x46546c67;
 const CHUNK_JSON = 0x4e4f534a;
@@ -36,8 +126,99 @@ const COMPONENT = {
   5125: { size: 4, read: 'getUint32' },
   5126: { size: 4, read: 'getFloat32' },
 };
+const TYPE_COMPONENTS = { SCALAR: 1, VEC2: 2, VEC3: 3, VEC4: 4, MAT2: 4, MAT3: 9, MAT4: 16 };
+
+// Preview is a decimated eyeball check, not a renderer of record.
+const PREVIEW_VERT_CAP = 4000000;
+const PREVIEW_TRI_CAP = 1500000;
 
 class GlbError extends Error {}
+
+// Draco decoder handle, injected by the UI (the decoder is WASM and is never
+// inlined: this file stays small and dependency-free).
+let DRACO = null;
+function setDracoModule(mod) { DRACO = mod; }
+const DRACO_EXT = 'KHR_draco_mesh_compression_ext';
+const DRACO_ATTR = { POSITION: 'POSITION', NORMAL: 'NORMAL', COLOR_0: 'COLOR', TEXCOORD_0: 'TEX_COORD' };
+
+function dracoOf(primitive) {
+  return (primitive.extensions && primitive.extensions[DRACO_EXT]) || null;
+}
+
+/** Cheap peek at the JSON chunk so the UI can fetch a decoder before converting. */
+function peekExtensions(input) {
+  try {
+    if (isGltfJson(input)) {
+      const j = typeof input === 'string' ? JSON.parse(input) : JSON.parse(new TextDecoder('utf-8').decode(input));
+      return (j.extensionsRequired || []).concat(j.extensionsUsed || []);
+    }
+    const { gltf } = parseGlb(input);
+    return (gltf.extensionsRequired || []).concat(gltf.extensionsUsed || []);
+  } catch (e) {
+    return [];
+  }
+}
+
+/**
+ * Decode one draco-compressed primitive. GetAttributeFloatForAllPoints returns
+ * already-dequantized floats, so quantized POSITION/NORMAL come back as real
+ * values (verified: decoded normals are exactly unit length).
+ */
+function decodeDraco(gltf, getBuffer, primitive) {
+  if (!DRACO) {
+    throw new GlbError('Draco-compressed geometry (' + DRACO_EXT + '). The decoder is not loaded - reconnect, or drop draco_decoder_gltf.js + draco_decoder_gltf.wasm onto this page.');
+  }
+  const ext = dracoOf(primitive);
+  const mod = DRACO;
+  const bytes = getViewBytes(gltf, getBuffer, ext.bufferView);
+  const decoder = new mod.Decoder();
+  const dbuf = new mod.DecoderBuffer();
+  try {
+    dbuf.Init(new Int8Array(bytes.buffer, bytes.byteOffset, bytes.byteLength), bytes.byteLength);
+    const gtype = decoder.GetEncodedGeometryType(dbuf);
+    const isMesh = gtype === mod.TRIANGULAR_MESH;
+    const geo = isMesh ? new mod.Mesh() : new mod.PointCloud();
+    const ok = isMesh ? decoder.DecodeBufferToMesh(dbuf, geo) : decoder.DecodeBufferToPointCloud(dbuf, geo);
+    if (!ok) {
+      mod.destroy(geo); mod.destroy(decoder); mod.destroy(dbuf);
+      throw new GlbError('Draco decode failed (corrupt or unsupported bitstream)');
+    }
+    const count = geo.num_points();
+    const out = { count, attributes: {}, indices: null };
+    for (const key of Object.keys(ext.attributes || {})) {
+      const dracoType = mod[DRACO_ATTR[key]];
+      if (dracoType === undefined) continue;
+      const attrId = decoder.GetAttributeId(geo, dracoType);
+      if (attrId < 0) continue;
+      const attr = decoder.GetAttribute(geo, attrId);
+      const nc = attr.num_components();
+      const f = new mod.DracoFloat32Array();
+      if (!decoder.GetAttributeFloatForAllPoints(geo, attr, f)) { mod.destroy(f); continue; }
+      const values = new Float64Array(count * nc);
+      for (let i = 0; i < values.length; i++) values[i] = f.GetValue(i);
+      mod.destroy(f);
+      out.attributes[key] = values;
+    }
+    if (isMesh) {
+      const faces = geo.num_faces();
+      const ia = new mod.DracoInt32Array();
+      const idx = new Float64Array(faces * 3);
+      for (let t = 0; t < faces; t++) {
+        decoder.GetFaceFromMesh(geo, t, ia);
+        idx[t * 3] = ia.GetValue(0);
+        idx[t * 3 + 1] = ia.GetValue(1);
+        idx[t * 3 + 2] = ia.GetValue(2);
+      }
+      mod.destroy(ia);
+      out.indices = idx;
+    }
+    mod.destroy(geo); mod.destroy(decoder); mod.destroy(dbuf);
+    return out;
+  } catch (e) {
+    try { mod.destroy(decoder); mod.destroy(dbuf); } catch (e2) { /* already freed */ }
+    throw e;
+  }
+}
 
 function base64ToBytes(b64) {
   const bin = atob(b64);
@@ -83,10 +264,7 @@ function isGltfJson(input) {
   return false;
 }
 
-/**
- * Buffer resolver: GLB BIN chunk, data: URIs, and (browser) sidecar files the
- * user dropped alongside a .gltf, matched by name.
- */
+/** Buffer source: GLB BIN chunk, data: URIs, or sidecar files dropped with a .gltf. */
 function makeBufferResolver(gltf, bin, sidecars) {
   const cache = new Map();
   return (bufferIndex) => {
@@ -103,9 +281,8 @@ function makeBufferResolver(gltf, bin, sidecars) {
       const name = buffer.uri.split('/').pop().split('?')[0].toLowerCase();
       const found = sidecars && sidecars.get(name);
       if (!found) {
-        throw new GlbError(
-          'This .gltf references external buffer "' + buffer.uri +
-          '". Drop the .gltf and its .bin file(s) together in one drop.');
+        throw new GlbError('This .gltf references external buffer "' + buffer.uri +
+          '". Drop the .gltf together with its .bin file(s).');
       }
       data = found;
     }
@@ -114,7 +291,7 @@ function makeBufferResolver(gltf, bin, sidecars) {
   };
 }
 
-function getViewData(gltf, getBuffer, bvIndex) {
+function getViewBytes(gltf, getBuffer, bvIndex) {
   const bv = gltf.bufferViews[bvIndex];
   if (!bv) throw new GlbError('Missing bufferView');
   const data = getBuffer(bv.buffer);
@@ -126,8 +303,6 @@ function getViewData(gltf, getBuffer, bvIndex) {
   return new Uint8Array(data.buffer, data.byteOffset + byteOffset, bv.byteLength);
 }
 
-const TYPE_COMPONENTS = { SCALAR: 1, VEC2: 2, VEC3: 3, VEC4: 4, MAT2: 4, MAT3: 9, MAT4: 16 };
-
 function readAccessor(gltf, getBuffer, accessorIndex) {
   const acc = gltf.accessors[accessorIndex];
   if (!acc) throw new GlbError('Missing accessor');
@@ -135,19 +310,18 @@ function readAccessor(gltf, getBuffer, accessorIndex) {
   if (!comp) throw new GlbError('Unsupported componentType ' + acc.componentType);
   const bvDef = gltf.bufferViews[acc.bufferView];
   if (!bvDef) throw new GlbError('Missing bufferView');
-  const bv = getViewData(gltf, getBuffer, acc.bufferView);
+  const bytes = getViewBytes(gltf, getBuffer, acc.bufferView);
   const byteOffset = acc.byteOffset || 0;
   const numComponents = TYPE_COMPONENTS[acc.type];
   if (!numComponents) throw new GlbError('Unsupported accessor type ' + acc.type);
-  // byteStride lives on the bufferView *definition*, not on the byte view.
-  // The Node version read bv.bytesPerElement off the Uint8Array (a field that
-  // does not exist, on an object that is not the definition), so every
-  // interleaved buffer fell back to dense stride and came out scrambled.
+  // byteStride lives on the bufferView DEFINITION. The old Node build asked a
+  // Uint8Array for "bytesPerElement" (never existed) so every interleaved
+  // buffer silently fell back to dense stride and came out scrambled.
   const stride = bvDef.byteStride || comp.size * numComponents;
-  const view = new DataView(bv.buffer, bv.byteOffset, bv.byteLength);
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   const needed = byteOffset + (acc.count - 1) * stride + numComponents * comp.size;
-  if (needed > bv.byteLength) {
-    throw new GlbError('accessor ' + accessorIndex + ' out of bounds (needs ' + needed + ' bytes, view has ' + bv.byteLength + ')');
+  if (acc.count > 0 && needed > bytes.byteLength) {
+    throw new GlbError('accessor ' + accessorIndex + ' out of bounds (needs ' + needed + ' bytes, view has ' + bytes.byteLength + ')');
   }
   const out = new Float64Array(acc.count * numComponents);
   const read = comp.read;
@@ -179,9 +353,9 @@ function readAccessor(gltf, getBuffer, accessorIndex) {
 // ---- 4x4 matrices, column-major (glTF convention) ----
 
 function matTRS(translation, rotation, scale) {
-  const [tx, ty, tz] = translation || [0, 0, 0];
-  const [sx, sy, sz] = scale || [1, 1, 1];
-  const [x, y, z, w] = rotation || [0, 0, 0, 1];
+  const tx = translation ? translation[0] : 0, ty = translation ? translation[1] : 0, tz = translation ? translation[2] : 0;
+  const sx = scale ? scale[0] : 1, sy = scale ? scale[1] : 1, sz = scale ? scale[2] : 1;
+  const x = rotation ? rotation[0] : 0, y = rotation ? rotation[1] : 0, z = rotation ? rotation[2] : 0, w = rotation ? rotation[3] : 1;
   const x2 = x + x, y2 = y + y, z2 = z + z;
   const xx = x * x2, yy = y * y2, zz = z * z2;
   const xy = x * y2, xz = x * z2, yz = y * z2;
@@ -195,7 +369,7 @@ function matTRS(translation, rotation, scale) {
 }
 
 function matMul(a, b) {
-  const out = new Array(16).fill(0);
+  const out = new Array(16);
   for (let col = 0; col < 4; col++) {
     for (let row = 0; row < 4; row++) {
       out[col * 4 + row] =
@@ -206,6 +380,7 @@ function matMul(a, b) {
   return out;
 }
 
+/** 3x3 normal matrix (inverse-transpose of upper 3x3), column-major. */
 function normalMatrix(m) {
   const a = m[0], d = m[1], g = m[2], b = m[4], e = m[5], h = m[6], c = m[8], f = m[9], i = m[10];
   const det = a * (e * i - f * h) - b * (d * i - f * g) + c * (d * h - e * g);
@@ -225,7 +400,7 @@ function nodeWorldMatrices(gltf) {
   const world = new Array(nodes.length);
   const seen = new Set();
   function walk(index, parent) {
-    if (seen.has(index)) return; // guard malformed/cyclic hierarchies
+    if (seen.has(index)) return; // malformed / cyclic hierarchy guard
     seen.add(index);
     const node = nodes[index];
     const local = node ? matTRS(node.translation, node.rotation, node.scale) : IDENTITY;
@@ -244,19 +419,39 @@ function fmtNum(v) {
 }
 
 /**
- * Convert GLB bytes (or glTF JSON) to OBJ, streamed in chunks.
- * @param {Uint8Array|string} input
- * @param {object} [options]
- * @param {boolean} [options.includeColors=true]
- * @param {Map<string,Uint8Array>} [options.sidecars] external .bin by lowercase filename
- * @param {(chunk:string)=>void} [options.onChunk] OBJ text arrives in pieces
- * @param {boolean} [options.collectPreview=false] gather geometry for WebGL
- * @returns {{obj:string|null, preview:object|null, stats:object}}
+ * Area-weighted smooth normals for preview-only use when the model has no
+ * NORMAL attribute (the OBJ still gets no vn lines - we do not invent
+ * normals the source never had).
  */
-function convertToObj(input, options) {
+function computeSmoothNormals(positions, tris, triCount) {
+  const n = new Float32Array(positions.length);
+  for (let t = 0; t < triCount; t++) {
+    const a = tris[t * 3] * 3, b = tris[t * 3 + 1] * 3, c = tris[t * 3 + 2] * 3;
+    const abx = positions[b] - positions[a], aby = positions[b + 1] - positions[a + 1], abz = positions[b + 2] - positions[a + 2];
+    const acx = positions[c] - positions[a], acy = positions[c + 1] - positions[a + 1], acz = positions[c + 2] - positions[a + 2];
+    const nx = aby * acz - abz * acy, ny = abz * acx - abx * acz, nz = abx * acy - aby * acx;
+    n[a] += nx; n[a + 1] += ny; n[a + 2] += nz;
+    n[b] += nx; n[b + 1] += ny; n[b + 2] += nz;
+    n[c] += nx; n[c + 1] += ny; n[c + 2] += nz;
+  }
+  for (let i = 0; i < n.length; i += 3) {
+    const l = Math.hypot(n[i], n[i + 1], n[i + 2]);
+    if (l > 1e-12) { n[i] /= l; n[i + 1] /= l; n[i + 2] /= l; }
+    else { n[i] = 0; n[i + 1] = 0; n[i + 2] = 1; }
+  }
+  return n;
+}
+
+/**
+ * Generator form. Yields {phase, objectsDone, objects, points, faces, chars}
+ * after each primitive; returns {preview, stats}.
+ * Text is emitted through opts.onChunk in bounded pieces (never one giant join).
+ */
+function* convertGEN(input, options) {
   const opts = options || {};
   const includeColors = opts.includeColors !== false;
-  const wantObj = typeof opts.onChunk === 'function' || opts.collectObj !== false;
+  const wantObj = typeof opts.onChunk === 'function' || opts.collectObj === true;
+  const wantPreview = !!opts.collectPreview;
 
   let gltf, bin = null;
   if (isGltfJson(input)) {
@@ -264,13 +459,16 @@ function convertToObj(input, options) {
   } else {
     ({ gltf, bin } = parseGlb(input));
   }
+  const extensionsUsed = (gltf.extensionsUsed || []);
   const getBuffer = makeBufferResolver(gltf, bin, opts.sidecars);
   const world = nodeWorldMatrices(gltf);
+  const dracoCache = new Map();
 
-  // --- streaming text writer ---
-  const objParts = wantObj && opts.onChunk === undefined ? [] : null;
+  // --- streaming text ---
+  const objParts = wantObj && !opts.onChunk ? [] : null;
   let textBuf = [];
   let textChars = 0;
+  let totalChars = 0;
   const FLUSH_CHARS = 1 << 20;
   function emitLine(line) {
     if (!wantObj) return;
@@ -283,21 +481,21 @@ function convertToObj(input, options) {
     const chunk = textBuf.join('\n') + '\n';
     textBuf = [];
     textChars = 0;
+    totalChars += chunk.length;
     if (opts.onChunk) opts.onChunk(chunk);
     else objParts.push(chunk);
   }
   emitLine('# Converted from GLB by glb2obj');
 
-  let totalPoints = 0, totalFaces = 0, totalNormals = 0, totalColors = 0;
-  let skippedPrimitives = 0, objects = 0;
+  // --- preview accumulation ---
+  const pvPosChunks = [], pvNrmChunks = [], pvColChunks = [];
+  const pvTris = [];        // Uint32Array, global (0-based) indices
+  let pvCount = 0, pvTriCount = 0, pvDropped = 0, pvTriDropped = 0;
+  const bounds = [Infinity, Infinity, Infinity, -Infinity, -Infinity, -Infinity];
 
-  // --- preview geometry ---
-  const pvVerts = [];   // Float32Array per object
-  const pvEdges = [];   // Uint32Array line-list per object (triangle edges)
-  const pvColors = [];
-  const PREVIEW_CAP = 2000000; // vertices
-  let previewCount = 0;
-  let previewTruncated = false;
+  let totalPoints = 0, totalFaces = 0, totalNormals = 0, totalColors = 0;
+  let skippedPrimitives = 0, objects = 0, objectsDone = 0;
+  let morphNodes = 0, skinNodes = 0, textures = 0, dracoPrims = 0, unsupported = new Set();
 
   const nodes = gltf.nodes || [];
   for (let nodeIndex = 0; nodeIndex < nodes.length; nodeIndex++) {
@@ -305,10 +503,12 @@ function convertToObj(input, options) {
     if (node.mesh === undefined) continue;
     const mesh = gltf.meshes[node.mesh];
     if (!mesh) continue;
-    const name = (node.name || mesh.name || 'object_' + nodeIndex).replace(/[^\w.-]/g, '_');
-
-    emitLine('o ' + name);
+    if (node.skin !== undefined) skinNodes++;
+    if (morphNodes === 0 && (mesh.primitives || []).some((p) => p.targets && p.targets.length)) morphNodes++;
     objects++;
+
+    const name = (node.name || mesh.name || 'object_' + nodeIndex).replace(/[^\w.-]/g, '_');
+    emitLine('o ' + name);
 
     const m = world[nodeIndex] || IDENTITY;
     const n = normalMatrix(m);
@@ -317,29 +517,44 @@ function convertToObj(input, options) {
     const n0 = n[0], n1 = n[1], n2 = n[2], n3 = n[3], n4 = n[4],
           n5 = n[5], n6 = n[6], n7 = n[7], n8 = n[8];
 
-    for (let primIndex = 0; primIndex < mesh.primitives.length; primIndex++) {
-      const primitive = mesh.primitives[primIndex];
+    const primList = mesh.primitives || [];
+    for (let primIndex = 0; primIndex < primList.length; primIndex++) {
+      const primitive = primList[primIndex];
       const posAttr = primitive.attributes ? primitive.attributes.POSITION : undefined;
-      if (posAttr === undefined) { skippedPrimitives++; continue; }
+      const draco = dracoOf(primitive);
+      let decoded = null;
+      if (draco) {
+        const key = nodeIndex + ':' + primIndex;
+        if (!dracoCache.has(key)) dracoCache.set(key, decodeDraco(gltf, getBuffer, primitive));
+        decoded = dracoCache.get(key);
+        if (!decoded.attributes.POSITION) { skippedPrimitives++; continue; }
+      } else if (posAttr === undefined) { skippedPrimitives++; continue; }
+      if (primitive.mode !== undefined && primitive.mode !== 4) unsupported.add('primitive mode ' + primitive.mode);
+      if (primitive.targets && primitive.targets.length) unsupported.add('morph targets');
 
-      const positions = readAccessor(gltf, getBuffer, posAttr);
+      const positions = decoded ? decoded.attributes.POSITION : readAccessor(gltf, getBuffer, posAttr);
       const count = positions.length / 3;
       const primVertBase = totalPoints;
       const primNormalBase = totalNormals;
 
-      const hasNormals = primitive.attributes && primitive.attributes.NORMAL !== undefined;
-      const normals = hasNormals ? readAccessor(gltf, getBuffer, primitive.attributes.NORMAL) : null;
+      const normalAttr = primitive.attributes ? primitive.attributes.NORMAL : undefined;
+      const hasNormals = decoded ? !!decoded.attributes.NORMAL : normalAttr !== undefined;
+      const normals = hasNormals ? (decoded ? decoded.attributes.NORMAL : readAccessor(gltf, getBuffer, normalAttr)) : null;
       const colorAttr = includeColors && primitive.attributes ? primitive.attributes.COLOR_0 : undefined;
-      const colors = colorAttr !== undefined ? readAccessor(gltf, getBuffer, colorAttr) : null;
+      const hasColors = decoded ? !!decoded.attributes.COLOR_0 : colorAttr !== undefined;
+      const colors = hasColors ? (decoded ? decoded.attributes.COLOR_0 : readAccessor(gltf, getBuffer, colorAttr)) : null;
       const colorComponents = colors ? colors.length / count : 0;
+      if ((primitive.attributes && primitive.attributes.TEXCOORD_0 !== undefined) || (decoded && decoded.attributes.TEXCOORD_0)) textures++;
+      if (decoded) dracoPrims++;
 
       emitLine('g ' + name + '_p' + (primIndex + 1));
 
-      const wantPv = opts.collectPreview && previewCount < PREVIEW_CAP;
-      const pvN = wantPv ? Math.min(count, PREVIEW_CAP - previewCount) : 0;
-      const pvPos = wantPv ? new Float32Array(pvN * 3) : null;
-      const pvCol = wantPv && colors ? new Float32Array(pvN * 3) : null;
-      if (wantPv && count > pvN) previewTruncated = true;
+      const room = wantPreview ? Math.max(0, PREVIEW_VERT_CAP - pvCount) : 0;
+      const pvN = wantPreview ? Math.min(count, room) : 0;
+      const pvPos = pvN > 0 ? new Float32Array(pvN * 3) : null;
+      const pvNrm = pvN > 0 && hasNormals ? new Float32Array(pvN * 3) : null;
+      const pvCol = pvN > 0 && colors ? new Float32Array(pvN * 3) : null;
+      if (wantPreview && count > pvN) pvDropped += count - pvN;
 
       for (let i = 0; i < count; i++) {
         const o3 = i * 3;
@@ -349,127 +564,770 @@ function convertToObj(input, options) {
         const wz = m2 * px + m6 * py + m10 * pz + m14;
         emitLine('v ' + fmtNum(wx) + ' ' + fmtNum(wy) + ' ' + fmtNum(wz));
         if (hasNormals) {
-          emitLine('vn ' +
-            fmtNum(n0 * normals[o3] + n3 * normals[o3 + 1] + n6 * normals[o3 + 2]) + ' ' +
-            fmtNum(n1 * normals[o3] + n4 * normals[o3 + 1] + n7 * normals[o3 + 2]) + ' ' +
-            fmtNum(n2 * normals[o3] + n5 * normals[o3 + 1] + n8 * normals[o3 + 2]));
+          const nx = n0 * normals[o3] + n3 * normals[o3 + 1] + n6 * normals[o3 + 2];
+          const ny = n1 * normals[o3] + n4 * normals[o3 + 1] + n7 * normals[o3 + 2];
+          const nz = n2 * normals[o3] + n5 * normals[o3 + 1] + n8 * normals[o3 + 2];
+          emitLine('vn ' + fmtNum(nx) + ' ' + fmtNum(ny) + ' ' + fmtNum(nz));
           totalNormals++;
+          if (pvNrm && i < pvN) { pvNrm[i * 3] = nx; pvNrm[i * 3 + 1] = ny; pvNrm[i * 3 + 2] = nz; }
         }
         if (colors) {
           const oc = i * colorComponents;
           let vc = 'vc';
-          for (let c = 0; c < colorComponents; c++) {
-            vc += ' ' + fmtNum(Math.max(0, Math.min(1, colors[oc + c])));
-          }
+          for (let c = 0; c < colorComponents; c++) vc += ' ' + fmtNum(Math.max(0, Math.min(1, colors[oc + c])));
           emitLine(vc);
           totalColors++;
         }
         totalPoints++;
+        // yield inside the hot loops: one big primitive must not block the tab
+        if ((i & 8191) === 8191) {
+          yield { phase: 'verts', objects, objectsDone, points: totalPoints, faces: totalFaces, chars: totalChars };
+        }
 
         if (pvPos && i < pvN) {
           pvPos[i * 3] = wx; pvPos[i * 3 + 1] = wy; pvPos[i * 3 + 2] = wz;
           if (pvCol) {
             const oc = i * colorComponents;
-            for (let c = 0; c < 3; c++) pvCol[i * 3 + c] = colors ? Math.max(0, Math.min(1, colors[oc + c])) : 1;
+            for (let c = 0; c < 3; c++) pvCol[i * 3 + c] = oc + c < colors.length ? Math.max(0, Math.min(1, colors[oc + c])) : 1;
           }
         }
       }
       if (pvPos) {
-        pvVerts.push(pvPos);
-        if (pvCol) pvColors.push(pvCol);
-        previewCount += pvN;
+        pvPosChunks.push(pvPos);
+        if (pvNrm) pvNrmChunks.push(pvNrm);
+        if (pvCol) pvColChunks.push(pvCol);
+        pvCount += pvN;
       }
 
-      if (primitive.indices !== undefined) {
-        const idx = readAccessor(gltf, getBuffer, primitive.indices);
-        const vOff = primVertBase + 1;
+      // indexed mesh -> faces (a point cloud has no indices)
+      const indexSource = decoded ? decoded.indices : (primitive.indices !== undefined ? readAccessor(gltf, getBuffer, primitive.indices) : null);
+      if (indexSource !== null && indexSource !== undefined) {
+        const idx = indexSource;
+        const vOff = primVertBase + 1;             // OBJ is 1-based, global
         const nOff = primNormalBase + 1 - vOff;
-        const wantPvEdges = opts.collectPreview && pvPos;
-        const pvIdx = wantPvEdges ? new Uint32Array(Math.min(idx.length, 6000000)) : null;
-        for (let i = 0; i + 2 < idx.length; i += 3) {
+        const triCount = (idx.length / 3) | 0;
+        const keepTris = wantPreview ? Math.min(triCount, Math.max(0, PREVIEW_TRI_CAP - pvTriCount)) : 0;
+        const pvTri = keepTris > 0 ? new Uint32Array(keepTris * 3) : null;
+        if (wantPreview && triCount > keepTris) pvTriDropped += triCount - keepTris;
+        for (let t = 0; t < triCount; t++) {
+          const i = t * 3;
           const a = idx[i] + vOff, b = idx[i + 1] + vOff, c = idx[i + 2] + vOff;
           if (hasNormals) emitLine('f ' + a + '/' + (a + nOff) + ' ' + b + '/' + (b + nOff) + ' ' + c + '/' + (c + nOff));
           else emitLine('f ' + a + ' ' + b + ' ' + c);
           totalFaces++;
-          if (pvIdx) {
-            pvIdx[i] = idx[i]; pvIdx[i + 1] = idx[i + 1]; pvIdx[i + 2] = idx[i + 2];
+          if ((t & 4095) === 4095) {
+            flushLines();
+            yield { phase: 'tris', objects, objectsDone, points: totalPoints, faces: totalFaces, chars: totalChars };
+          }
+          if (pvTri && t < keepTris) {
+            const o = t * 3;
+            pvTri[o] = idx[i] + primVertBase;
+            pvTri[o + 1] = idx[i + 1] + primVertBase;
+            pvTri[o + 2] = idx[i + 2] + primVertBase;
           }
         }
-        if (pvIdx) pvEdges.push({ index: pvIdx.subarray(0, (idx.length / 3 | 0) * 3), base: primVertBase });
+        if (pvTri) { pvTris.push(pvTri); pvTriCount += keepTris; }
       }
+
+      yield { phase: 'primitive', objects, objectsDone, points: totalPoints, faces: totalFaces, chars: totalChars };
     }
+    objectsDone++;
   }
 
   if (totalPoints === 0) throw new GlbError('No geometry found (need meshes with POSITION attribute)');
   flushLines();
 
+  let preview = null;
+  if (wantPreview && pvCount > 0) {
+    const positions = new Float32Array(pvCount * 3);
+    let at = 0;
+    for (const c of pvPosChunks) { positions.set(c, at); at += c.length; }
+    for (let i = 0; i < pvCount; i++) {
+      const x = positions[i * 3], y = positions[i * 3 + 1], z = positions[i * 3 + 2];
+      if (x < bounds[0]) bounds[0] = x; if (y < bounds[1]) bounds[1] = y; if (z < bounds[2]) bounds[2] = z;
+      if (x > bounds[3]) bounds[3] = x; if (y > bounds[4]) bounds[4] = y; if (z > bounds[5]) bounds[5] = z;
+    }
+    const triIndex = new Uint32Array(pvTriCount * 3);
+    at = 0;
+    for (const c of pvTris) { triIndex.set(c, at); at += c.length; }
+    const ownNormals = pvNrmChunks.length === pvPosChunks.length;
+    const normals = ownNormals
+      ? concatOr(pvNrmChunks, pvCount * 3)
+      : (pvTriCount > 0 ? computeSmoothNormals(positions, triIndex, pvTriCount) : null);
+    preview = {
+      count: pvCount,
+      positions,
+      normals,
+      normalsGenerated: !ownNormals && !!normals,
+      colors: pvColChunks.length ? concatOr(pvColChunks, pvCount * 3) : null,
+      triangles: triIndex,
+      triCount: pvTriCount,
+      bbox: bounds,
+      dropped: { verts: pvDropped, tris: pvTriDropped },
+    };
+  }
+
+  function concatOr(chunks, len) {
+    const out = new Float32Array(len);
+    let at = 0;
+    for (const c of chunks) { out.set(c, at); at += c.length; }
+    return out;
+  }
+
   return {
     obj: objParts ? objParts.join('') : null,
-    preview: opts.collectPreview ? { verts: pvVerts, colors: pvColors, edges: pvEdges, truncated: previewTruncated } : null,
-    stats: { points: totalPoints, faces: totalFaces, normals: totalNormals, colors: totalColors, objects, skippedPrimitives },
+    preview,
+    stats: {
+      points: totalPoints, faces: totalFaces, normals: totalNormals, colors: totalColors,
+      objects, skippedPrimitives, chars: totalChars,
+      textures, morph: morphNodes > 0, skin: skinNodes > 0, draco: dracoPrims,
+      unsupported: Array.from(unsupported), extensionsUsed,
+    },
   };
+}
+
+/** Synchronous drain (used by the Node harness and simple callers). */
+function convertToObj(input, options) {
+  const g = convertGEN(input, options);
+  let r;
+  while (!(r = g.next()).done) { /* nothing */ }
+  return r.value;
 }
 /* ==== CORE END ==== */
 
-// ---- UI ----
-const dropEl = document.getElementById('drop');
-const logEl = document.getElementById('log');
-const colorsChk = document.getElementById('colors');
+/* ==== PREVIEW BEGIN ==== */
+// Hand-rolled WebGL preview: no three.js (must stay one dependency-free file).
+// Two programs:
+//   lit  - uses the model's own normals (smooth) or a flat color (points/wire/grid)
+//   flat - derives face normals from screen-space derivatives, for models with
+//          no NORMAL attribute, so the shape is actually readable
 
-function log(msg) { logEl.textContent += msg + '\n'; }
+function m4Perspective(fovy, aspect, near, far) {
+  const f = 1 / Math.tan(fovy / 2), nf = 1 / (near - far);
+  return [f / aspect, 0, 0, 0, 0, f, 0, 0, 0, 0, (far + near) * nf, -1, 0, 0, 2 * far * near * nf, 0];
+}
+function m4LookAt(eye, center, up) {
+  let zx = eye[0] - center[0], zy = eye[1] - center[1], zz = eye[2] - center[2];
+  let l = Math.hypot(zx, zy, zz) || 1; zx /= l; zy /= l; zz /= l;
+  let xx = up[1] * zz - up[2] * zy, xy = up[2] * zx - up[0] * zz, xz = up[0] * zy - up[1] * zx;
+  l = Math.hypot(xx, xy, xz) || 1; xx /= l; xy /= l; xz /= l;
+  const yx = zy * xz - zz * xy, yy = zz * xx - zx * xz, yz = zx * xy - zy * xx;
+  return [
+    xx, yx, zx, 0, xy, yy, zy, 0, xz, yz, zz, 0,
+    -(xx * eye[0] + xy * eye[1] + xz * eye[2]),
+    -(yx * eye[0] + yy * eye[1] + yz * eye[2]),
+    -(zx * eye[0] + zy * eye[1] + zz * eye[2]), 1,
+  ];
+}
+function m4Mul(a, b) {
+  const o = new Array(16);
+  for (let c = 0; c < 4; c++) for (let r = 0; r < 4; r++) {
+    o[c * 4 + r] = a[r] * b[c * 4] + a[4 + r] * b[c * 4 + 1] + a[8 + r] * b[c * 4 + 2] + a[12 + r] * b[c * 4 + 3];
+  }
+  return o;
+}
+
+const VERT =
+  'attribute vec3 aPos; attribute vec3 aNrm; attribute vec3 aCol;' +
+  'uniform mat4 uMVP; uniform float uSize;' +
+  'varying vec3 vPos; varying vec3 vNrm; varying vec3 vCol;' +
+  'void main(){ gl_Position = uMVP * vec4(aPos, 1.0); gl_PointSize = uSize;' +
+  '  vPos = aPos; vNrm = aNrm; vCol = aCol; }';
+
+const FRAG_BODY =
+  'precision mediump float;\n'
+  + 'varying vec3 vPos; varying vec3 vNrm; varying vec3 vCol;\n'
+  + 'uniform vec3 uColor; uniform float uAlpha; uniform bool uVCol; uniform bool uLight;\n'
+  + 'float shade(vec3 n){\n'
+  + '  vec3 L1 = normalize(vec3(0.35, 0.85, 0.55));\n'
+  + '  vec3 L2 = normalize(vec3(-0.65, -0.15, -0.45));\n'
+  + '  vec3 V = normalize(vec3(0.0, 0.0, 1.0));\n'
+  + '  float d1 = max(dot(n, L1), 0.0), d2 = max(dot(n, L2), 0.0);\n'
+  + '  float rim = pow(1.0 - abs(dot(n, V)), 2.0);\n'
+  + '  return 0.20 + 0.62 * d1 + 0.24 * d2 + 0.16 * rim;\n'
+  + '}\n';
+
+const FRAG_SMOOTH = FRAG_BODY +
+  'void main(){\n'
+  + '  vec3 n = normalize(vNrm);\n'
+  + '  if (!gl_FrontFacing) n = -n;\n'
+  + '  vec3 c = uVCol ? clamp(vCol, 0.0, 1.0) : uColor;\n'
+  + '  gl_FragColor = vec4(c * (uLight ? shade(n) : 1.0), uAlpha);\n'
+  + '}';
+
+class Preview {
+  static COLORS = { solid: [0.76, 0.80, 0.86], wire: [0.45, 0.68, 1.0], points: [0.62, 0.78, 1.0], backing: [0.05, 0.062, 0.075] };
+  static LIT = { solid: 1, wire: 0, points: 0, backing: 0 };
+  static ALPHA = { solid: 1, wire: 0.85, points: 1, backing: 1 };
+  constructor(canvas) {
+    this.canvas = canvas;
+    const attrs = { antialias: true, alpha: false, preserveDrawingBuffer: true };
+    this.gl2 = !!window.WebGL2RenderingContext;
+    this.gl = (this.gl2 && canvas.getContext('webgl2', attrs)) || canvas.getContext('webgl', attrs);
+    this.data = null;
+    this.mode = 'solid';
+    this.yaw = 0.7; this.pitch = 0.32; this.dist = 3; this.pan = [0, 0, 0];
+    this.center = [0, 0, 0]; this.extent = 1; this.nearFar = [0.001, 100];
+    this.dpr = Math.min(2, window.devicePixelRatio || 1);
+    this.gpu = null; this.grid = null;
+    if (!this.gl) return;
+    const gl = this.gl;
+    gl.enable(gl.DEPTH_TEST);
+    gl.depthFunc(gl.LEQUAL);
+    gl.enable(gl.BLEND);
+    gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+    gl.clearColor(0.039, 0.051, 0.071, 1);
+    this.pLit = this.link(VERT, FRAG_SMOOTH);
+    this.bindInput();
+  }
+
+  link(vs, fs) {
+    const gl = this.gl;
+    const compile = (type, src) => {
+      const s = gl.createShader(type);
+      gl.shaderSource(s, src); gl.compileShader(s);
+      if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw new Error('shader: ' + gl.getShaderInfoLog(s));
+      return s;
+    };
+    const p = gl.createProgram();
+    gl.attachShader(p, compile(gl.VERTEX_SHADER, vs));
+    gl.attachShader(p, compile(gl.FRAGMENT_SHADER, fs));
+    gl.bindAttribLocation(p, 0, 'aPos');
+    gl.bindAttribLocation(p, 1, 'aNrm');
+    gl.bindAttribLocation(p, 2, 'aCol');
+    gl.linkProgram(p);
+    if (!gl.getProgramParameter(p, gl.LINK_STATUS)) throw new Error('link: ' + gl.getProgramInfoLog(p));
+    p.u = (n) => gl.getUniformLocation(p, n);
+    return p;
+  }
+
+  setData(preview) {
+    this.data = preview || null;
+    if (!this.gl) return;
+    const gl = this.gl;
+    this.free();
+    if (!this.data) { this.render(); return; }
+    const d = this.data;
+    const buf = (data, target) => {
+      const b = gl.createBuffer();
+      gl.bindBuffer(target || gl.ARRAY_BUFFER, b);
+      gl.bufferData(target || gl.ARRAY_BUFFER, data, gl.STATIC_DRAW);
+      return b;
+    };
+    this.gpu = {
+      pos: buf(d.positions),
+      nrm: buf(d.normals || new Float32Array(d.count * 3).fill(1)),
+      col: buf(d.colors || new Float32Array(d.count * 3).fill(0.74)),
+    };
+    if (d.triCount > 0) this.gpu.tri = buf(d.triangles, gl.ELEMENT_ARRAY_BUFFER);
+    if (d.triCount > 0) {
+      // Wire mode on a dense mesh is unreadable if every edge is drawn, so the
+      // edge list keeps every k-th triangle only.
+      const maxWireTris = 60000;
+      const stride = Math.max(1, Math.ceil(d.triCount / maxWireTris));
+      const src = d.triangles;
+      let shown = 0;
+      for (let t = 0; t < d.triCount; t += stride) shown++;
+      const e = new Uint32Array(shown * 6);
+      let o = 0;
+      for (let t = 0; t < d.triCount; t += stride) {
+        const a = src[t * 3], b = src[t * 3 + 1], c = src[t * 3 + 2];
+        e[o] = a; e[o + 1] = b; e[o + 2] = b; e[o + 3] = c; e[o + 4] = c; e[o + 5] = a;
+        o += 6;
+      }
+      this.gpu.edge = buf(e, gl.ELEMENT_ARRAY_BUFFER);
+      this.gpu.edgeCount = e.length;
+      this.wireStride = stride;
+    }
+    this.fit();
+    this.render();
+  }
+
+  free() {
+    if (!this.gpu) return;
+    for (const k of Object.keys(this.gpu)) {
+      const b = this.gpu[k];
+      if (b instanceof WebGLBuffer) this.gl.deleteBuffer(b);
+    }
+    this.gpu = null;
+  }
+
+  /** Ground grid on XZ + RGB axis ticks, sized to the model. */
+  buildGrid() {
+    const gl = this.gl;
+    if (this.grid) { gl.deleteBuffer(this.grid.pos); gl.deleteBuffer(this.grid.col); this.grid = null; }
+    if (!this.data) return;
+    const b = this.data.bbox;
+    const y = b[1];
+    const span = Math.max(b[3] - b[0], b[5] - b[2], 1e-6);
+    const step = Math.pow(10, Math.floor(Math.log10(span))) * (span / Math.pow(10, Math.floor(Math.log10(span))) > 5 ? 1 : 0.5);
+    const half = step * Math.ceil((span * 1.5) / step / 2);
+    const cx = (b[0] + b[3]) / 2, cz = (b[2] + b[5]) / 2;
+    const pos = [], col = [];
+    const dim = [0.16, 0.19, 0.24], axis = [[0.75, 0.28, 0.3], [0.3, 0.65, 0.35], [0.28, 0.5, 0.9]];
+    for (let i = -4; i <= 4; i++) {
+      const t = i * step;
+      const c = i === 0 ? dim : dim;
+      // lines parallel to X
+      pos.push(cx - half, y, cz + t, cx + half, y, cz + t); col.push(...c, ...c);
+      // lines parallel to Z
+      pos.push(cx + t, y, cz - half, cx + t, y, cz + half); col.push(...c, ...c);
+    }
+    const ax = half * 1.15;
+    pos.push(cx, y, cz, cx + ax, y, cz); col.push(...axis[0], ...axis[0]);      // X
+    pos.push(cx, y, cz, cx, y + ax, cz); col.push(...axis[1], ...axis[1]);      // Y
+    pos.push(cx, y, cz, cx, y, cz + ax); col.push(...axis[2], ...axis[2]);      // Z
+    this.grid = { pos: gl.createBuffer(), col: gl.createBuffer(), count: pos.length / 3 };
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.grid.pos); gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(pos), gl.STATIC_DRAW);
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.grid.col); gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(col), gl.STATIC_DRAW);
+  }
+
+  fit() {
+    const d = this.data;
+    if (!d) return;
+    const b = d.bbox;
+    this.center = [(b[0] + b[3]) / 2, (b[1] + b[4]) / 2, (b[2] + b[5]) / 2];
+    const extent = Math.max(b[3] - b[0], b[4] - b[1], b[5] - b[2]) || 1;
+    this.extent = extent;
+    this.dist = extent * 2.8;
+    this.pan = [0, 0, 0];
+    this.nearFar = [extent / 5000, extent * 60];
+    this.buildGrid();
+  }
+
+  resize() {
+    const c = this.canvas;
+    const w = Math.max(1, Math.round(c.clientWidth * this.dpr)), h = Math.max(1, Math.round(c.clientHeight * this.dpr));
+    if (c.width !== w || c.height !== h) { c.width = w; c.height = h; this.gl.viewport(0, 0, w, h); }
+  }
+
+  draw(p, mvp, kind) {
+    const gl = this.gl, d = this.data;
+    gl.useProgram(p);
+    gl.uniformMatrix4fv(p.u('uMVP'), false, new Float32Array(mvp));
+    gl.uniform1f(p.u('uSize'), this.pointSize(kind));
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.gpu.pos);
+    gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 0, 0);
+    const useNrm = kind === 'solid' && !!d.normals;
+    if (useNrm) {
+      gl.bindBuffer(gl.ARRAY_BUFFER, this.gpu.nrm);
+      gl.enableVertexAttribArray(1); gl.vertexAttribPointer(1, 3, gl.FLOAT, false, 0, 0);
+    } else {
+      gl.disableVertexAttribArray(1); gl.vertexAttrib3f(1, 0, 0, 1);
+    }
+    const useVCol = kind === 'solid' ? !!d.colors : kind === 'points' && !!d.colors;
+    if (useVCol) {
+      gl.bindBuffer(gl.ARRAY_BUFFER, this.gpu.col);
+      gl.enableVertexAttribArray(2); gl.vertexAttribPointer(2, 3, gl.FLOAT, false, 0, 0);
+      gl.uniform1i(p.u('uVCol'), 1);
+    } else {
+      gl.disableVertexAttribArray(2);
+      gl.uniform1i(p.u('uVCol'), 0);
+      const C = Preview.COLORS[kind];
+      gl.uniform3f(p.u('uColor'), C[0], C[1], C[2]);
+    }
+    gl.uniform1i(p.u('uLight'), Preview.LIT[kind]);
+    gl.uniform1f(p.u('uAlpha'), Preview.ALPHA[kind]);
+    if (kind === 'points') {
+      gl.drawArrays(gl.POINTS, 0, d.count);
+    } else if (kind === 'wire') {
+      if (this.gpu.edge) {
+        gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, this.gpu.edge);
+        gl.drawElements(gl.LINES, this.gpu.edgeCount, gl.UNSIGNED_INT, 0);
+      }
+    } else {
+      gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, this.gpu.tri);
+      gl.drawElements(gl.TRIANGLES, d.triCount * 3, gl.UNSIGNED_INT, 0);
+    }
+  }
+
+  /** Point sprites: fixed pixel size tuned to density so a real point cloud reads as points. */
+  pointSize(kind) {
+    if (kind !== 'points') return 1;
+    const n = this.data ? this.data.count : 0;
+    const px = n > 300000 ? 1 : n > 60000 ? 1.6 : n > 8000 ? 2.2 : 3.2;
+    return px * this.dpr;
+  }
+
+  render() {
+    if (!this.gl) return;
+    const gl = this.gl, d = this.data;
+    this.resize();
+    gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+
+    const c = this.canvas;
+    const aspect = c.width / Math.max(1, c.height);
+    const [near, far] = this.nearFar;
+    const target = [this.center[0] + this.pan[0], this.center[1] + this.pan[1], this.center[2] + this.pan[2]];
+    const cp = Math.cos(this.pitch), sp = Math.sin(this.pitch);
+    const eye = [
+      target[0] + this.dist * cp * Math.cos(this.yaw),
+      target[1] + this.dist * sp,
+      target[2] + this.dist * cp * Math.sin(this.yaw),
+    ];
+    const mvp = m4Mul(m4Perspective(0.75, aspect, near, far), m4LookAt(eye, target, [0, 1, 0]));
+
+    if (this.grid) {
+      const p = this.pLit;
+      gl.useProgram(p);
+      gl.uniformMatrix4fv(p.u('uMVP'), false, new Float32Array(mvp));
+      gl.uniform1i(p.u('uVCol'), 1);
+      gl.uniform1i(p.u('uLight'), 0);
+      gl.uniform1f(p.u('uAlpha'), 0.9);
+      gl.uniform1f(p.u('uSize'), 1);
+      gl.bindBuffer(gl.ARRAY_BUFFER, this.grid.pos);
+      gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 0, 0);
+      gl.disableVertexAttribArray(1); gl.vertexAttrib3f(1, 0, 1, 0);
+      gl.bindBuffer(gl.ARRAY_BUFFER, this.grid.col);
+      gl.enableVertexAttribArray(2); gl.vertexAttribPointer(2, 3, gl.FLOAT, false, 0, 0);
+      gl.drawArrays(gl.LINES, 0, this.grid.count);
+    }
+
+    if (!d || !this.gpu) return;
+    if (this.mode === 'solid' && d.triCount > 0) this.draw(this.pLit, mvp, 'solid');
+    else if (this.mode === 'wire') {
+      if (d.triCount > 0) {
+        // dark unlit fill pushed back, then the edges on top: without the
+        // polygon offset the lines z-fight the surface and speckle
+        gl.enable(gl.POLYGON_OFFSET_FILL);
+        gl.polygonOffset(1.0, 1.0);
+        this.draw(this.pLit, mvp, 'backing');
+        gl.disable(gl.POLYGON_OFFSET_FILL);
+      }
+      this.draw(this.pLit, mvp, 'wire');
+    } else this.draw(this.pLit, mvp, 'points');
+  }
+
+  bindInput() {
+    const c = this.canvas;
+    let dragging = false, last = null, button = 0;
+    c.addEventListener('pointerdown', (e) => { dragging = true; last = [e.clientX, e.clientY]; button = e.button; c.setPointerCapture(e.pointerId); });
+    c.addEventListener('pointermove', (e) => {
+      if (!dragging) return;
+      const dx = e.clientX - last[0], dy = e.clientY - last[1];
+      last = [e.clientX, e.clientY];
+      if (button === 2 || e.shiftKey) {
+        const s = this.extent / Math.max(1, c.clientHeight);
+        // pan in screen space: right = camera right, up = camera up
+        const r = [Math.sin(this.yaw), 0, -Math.cos(this.yaw)];
+        const u = [Math.cos(this.yaw) * Math.sin(this.pitch), -Math.cos(this.pitch), Math.sin(this.yaw) * Math.sin(this.pitch)];
+        this.pan[0] += (-dx * r[0] + dy * u[0]) * s;
+        this.pan[1] += (-dx * r[1] + dy * u[1]) * s;
+        this.pan[2] += (-dx * r[2] + dy * u[2]) * s;
+      } else {
+        this.yaw += dx * 0.008;
+        this.pitch = Math.max(-1.5, Math.min(1.5, this.pitch + dy * 0.008));
+      }
+      this.render();
+    });
+    c.addEventListener('pointerup', () => { dragging = false; });
+    c.addEventListener('wheel', (e) => {
+      e.preventDefault();
+      this.dist *= e.deltaY > 0 ? 1.12 : 1 / 1.12;
+      this.render();
+    }, { passive: false });
+    c.addEventListener('contextmenu', (e) => e.preventDefault());
+  }
+}
+/* ==== PREVIEW END ==== */
+
+/* ==== UI ==== */
+const dropEl = document.getElementById('drop');
+const queueEl = document.getElementById('queue');
+const colorsChk = document.getElementById('colors');
+const hudEl = document.getElementById('hud');
+const emptyEl = document.getElementById('empty');
+const modesEl = document.getElementById('modes');
+const view = new Preview(document.getElementById('gl'));
+
+const items = [];
+let active = null;
+
+/* ---- Draco decoder loading (WASM is never inlined in this file) ---- */
+const DRACO_CDN = 'https://www.gstatic.com/draco/versioned/decoders/1.5.7/';
+let dracoPromise = null;
+let dracoWasmBytes = null;   // set by dropping draco_decoder_gltf.wasm on the page
+
+function loadDracoScript(jsUrl, wasmUrl) {
+  return new Promise((resolve, reject) => {
+    const s = document.createElement('script');
+    s.src = jsUrl;
+    s.onload = async () => {
+      try {
+        const factory = window.DracoDecoderModule || window.createDracoDecoderModule;
+        if (!factory) return reject(new Error('decoder script did not define DracoDecoderModule'));
+        const cfg = { locateFile: (name) => (name.endsWith('.wasm') ? wasmUrl : name) };
+        if (dracoWasmBytes) cfg.wasmBinary = dracoWasmBytes;
+        resolve(await factory(cfg));
+      } catch (e) { reject(e); }
+    };
+    s.onerror = () => reject(new Error('could not load ' + jsUrl));
+    document.head.appendChild(s);
+  });
+}
+
+async function ensureDraco(statusFn) {
+  if (dracoPromise) return dracoPromise;
+  dracoPromise = (async () => {
+    const tried = [];
+    const sources = [];
+    if (location.protocol !== 'file:') sources.push(['./draco_decoder_gltf.js', './draco_decoder_gltf.wasm']);
+    sources.push([DRACO_CDN + 'draco_decoder_gltf.js', DRACO_CDN + 'draco_decoder_gltf.wasm']);
+    for (const [js, wasm] of sources) {
+      try {
+        statusFn && statusFn('loading Draco decoder…');
+        const mod = await loadDracoScript(js, wasm);
+        setDracoModule(mod);
+        return mod;
+      } catch (e) { tried.push(e.message); }
+    }
+    dracoPromise = null;
+    throw new Error('Could not load the Draco decoder (' + tried.join('; ') + '). While offline: save draco_decoder_gltf.js and draco_decoder_gltf.wasm next to this file, or drop both onto this page and retry.');
+  })();
+  return dracoPromise;
+}
+
+async function installDroppedDraco(files) {
+  const js = files.find((f) => /^draco_decoder.*\.js$/i.test(f.name));
+  const wasm = files.find((f) => /^draco_decoder.*\.wasm$/i.test(f.name));
+  let installed = false;
+  if (wasm) { dracoWasmBytes = new Uint8Array(await wasm.arrayBuffer()); installed = true; }
+  if (js) {
+    const src = await js.text();
+    (0, eval)(src); // user-dropped decoder glue, runs at global scope
+    installed = true;
+  }
+  if (installed && window.DracoDecoderModule) {
+    dracoPromise = (async () => {
+      const mod = await window.DracoDecoderModule({ wasmBinary: dracoWasmBytes });
+      setDracoModule(mod);
+      return mod;
+    })();
+  }
+  return installed;
+}
+
+function fmtInt(n) { return n.toLocaleString(); }
+function fmtBytes(n) { return n >= 1048576 ? (n / 1048576).toFixed(1) + ' MB' : (n / 1024).toFixed(0) + ' KB'; }
+
+function makeItem(file) {
+  const li = document.createElement('li');
+  li.className = 'item';
+  li.innerHTML =
+    '<div class="name"><b></b><span class="size"></span></div>' +
+    '<div class="stat">queued</div>' +
+    '<div class="bar"><i></i></div>' +
+    '<div class="acts">' +
+    '<button class="primary act-save" disabled>Save .obj</button>' +
+    '<button class="act-view" disabled>Preview</button>' +
+    '<button class="act-cancel">Cancel</button>' +
+    '</div>';
+  li.querySelector('b').textContent = file.name;
+  li.querySelector('.size').textContent = fmtBytes(file.size);
+  const it = {
+    file, li, blob: null, stats: null, preview: null, state: 'queued',
+    statEl: li.querySelector('.stat'), barEl: li.querySelector('.bar'), barFill: li.querySelector('.bar > i'),
+    saveBtn: li.querySelector('.act-save'), viewBtn: li.querySelector('.act-view'), cancelBtn: li.querySelector('.act-cancel'),
+  };
+  it.setStat = (txt, cls) => { it.statEl.textContent = txt; it.statEl.className = 'stat' + (cls ? ' ' + cls : ''); };
+  it.setBar = (p) => { it.barFill.style.width = (p == null ? 0 : Math.round(p * 100)) + '%'; };
+  it.cancelBtn.onclick = () => { it.cancelled = true; };
+  it.saveBtn.onclick = () => saveItem(it);
+  it.viewBtn.onclick = () => showPreview(it);
+  queueEl.appendChild(li);
+  items.push(it);
+  return it;
+}
+
+function statLine(stats, ms) {
+  const bits = [fmtInt(stats.points) + ' verts'];
+  if (stats.faces) bits.push(fmtInt(stats.faces) + ' faces');
+  if (stats.normals) bits.push(fmtInt(stats.normals) + ' normals');
+  if (stats.colors) bits.push(fmtInt(stats.colors) + ' colors');
+  if (stats.draco) bits.push('draco×' + stats.draco);
+  if (stats.objects > 1) bits.push(stats.objects + ' objects');
+  if (stats.skippedPrimitives) bits.push(stats.skippedPrimitives + ' prims skipped');
+  bits.push(ms < 1000 ? Math.round(ms) + ' ms' : (ms / 1000).toFixed(2) + ' s');
+  return bits.join(' · ');
+}
+function warnLine(stats) {
+  const w = [];
+  if (stats.textures) w.push(fmtInt(stats.textures) + ' primitive(s) have UVs — OBJ texturing not emitted');
+  if (stats.morph) w.push('morph targets dropped');
+  if (stats.skin) w.push('skinning/bones dropped (bind-pose only)');
+  if (stats.unsupported.length) w.push('unsupported: ' + stats.unsupported.join(', '));
+  return w.join(' · ');
+}
+
+/** Pump the generator with time-sliced frames so huge models stay responsive. */
+async function runConversion(it, data, sidecars) {
+  const t0 = performance.now();
+  const parts = [];
+  const g = convertGEN(data, {
+    includeColors: colorsChk.checked,
+    sidecars,
+    collectPreview: true,
+    onChunk: (c) => parts.push(c),
+  });
+  for (;;) {
+    const budgetEnd = performance.now() + 24;
+    let r = null;
+    for (;;) {
+      r = g.next();
+      if (r.done || performance.now() > budgetEnd) break;
+    }
+    if (it.cancelled) { g.return(); it.state = 'cancelled'; it.setStat('cancelled', 'warn'); it.barEl.hidden = true; it.cancelBtn.hidden = true; return; }
+    if (r.done) {
+      const res = r.value;
+      it.blob = new Blob(parts, { type: 'text/plain' });
+      it.stats = res.stats;
+      it.preview = res.preview;
+      it.state = 'done';
+      it.ms = performance.now() - t0;
+      it.setBar(1);
+      it.setStat(statLine(res.stats, it.ms));
+      const warn = warnLine(res.stats);
+      if (warn) it.setStat(statLine(res.stats, it.ms) + '\n' + warn, 'warn');
+      it.saveBtn.disabled = false;
+      it.viewBtn.disabled = false;
+      it.cancelBtn.hidden = true;
+      showPreview(it);
+      return;
+    }
+    const p = r.value;
+    it.setStat('converting… ' + fmtInt(p.points) + ' verts, ' + fmtInt(p.chars / 1024 | 0) + ' KB');
+  }
+}
 
 async function handleFiles(files) {
   const list = Array.from(files);
+  await installDroppedDraco(list);
   const sidecars = new Map();
   const models = [];
   for (const f of list) {
     if (/\.(glb|gltf)$/i.test(f.name)) models.push(f);
     else if (/\.bin$/i.test(f.name)) sidecars.set(f.name.toLowerCase(), new Uint8Array(await f.arrayBuffer()));
   }
-  if (!models.length) { log('No .glb/.gltf in drop'); return; }
+  if (!models.length) return;
   for (const f of models) {
-    const t0 = performance.now();
-    const data = new Uint8Array(await f.arrayBuffer());
-    const parts = [];
+    const it = makeItem(f);
+    it.setStat('reading…');
+    let data;
+    try { data = new Uint8Array(await f.arrayBuffer()); }
+    catch (err) { it.state = 'error'; it.setStat('could not read file: ' + err.message, 'err'); continue; }
+    it.setBar(0.05);
     try {
-      const res = convertToObj(data, {
-        includeColors: colorsChk.checked,
-        sidecars,
-        onChunk: (c) => parts.push(c),
-      });
-      const blob = new Blob(parts, { type: 'text/plain' });
-      const base = f.name.replace(/\.(glb|gltf)$/i, '');
-      const a = document.createElement('a');
-      a.href = URL.createObjectURL(blob);
-      a.download = base + '.obj';
-      a.click();
-      setTimeout(() => URL.revokeObjectURL(a.href), 5000);
-      const s = res.stats;
-      log(base + ': ' + s.points.toLocaleString() + ' verts, ' + s.faces.toLocaleString() + ' faces in ' +
-        Math.round(performance.now() - t0) + ' ms -> saved');
-    } catch (err) {
-      log('ERROR ' + f.name + ': ' + err.message);
+      if (peekExtensions(data).includes(DRACO_EXT)) await ensureDraco((s) => it.setStat(s));
+      await runConversion(it, data, sidecars);
+    }
+    catch (err) {
+      it.state = 'error';
+      it.setStat(err && err.name === 'RangeError' ? 'out of memory — model too large for this browser' : (err.message || String(err)), 'err');
+      it.barEl.hidden = true;
+      it.cancelBtn.hidden = true;
     }
   }
 }
+
+function showPreview(it) {
+  if (!it || !it.preview) return;
+  active = it;
+  for (const x of items) x.li.classList.toggle('active', x === it);
+  emptyEl.hidden = true;
+  try {
+    view.setData(it.preview);
+  } catch (err) {
+    // a preview failure must never invalidate a conversion that worked
+    it.viewBtn.disabled = true;
+    it.setStat(statLine(it.stats, it.ms || 0) + '\npreview unavailable: ' + err.message, 'warn');
+    return;
+  }
+  const d = it.preview;
+  const b = d.bbox;
+  const size = [b[3] - b[0], b[4] - b[1], b[5] - b[2]];
+  hudEl.hidden = false;
+  hudEl.innerHTML =
+    '<b>' + it.file.name.replace(/</g, '&lt;') + '</b><br>' +
+    fmtInt(it.stats.points) + ' verts · ' + fmtInt(it.stats.faces) + ' faces' +
+    (d.triCount < it.stats.faces ? ' (showing ' + fmtInt(d.triCount) + ' decimated)' : '') + '<br>' +
+    'size ' + size.map((v) => v.toFixed(3)).join(' × ') + '<br>' +
+    (d.normals && !d.normalsGenerated ? 'normals: from model (smooth)'
+      : d.normals ? 'normals: none in file — generated for preview'
+      : 'point cloud — no faces');
+}
+
+async function saveItem(it) {
+  if (!it.blob) return;
+  const base = it.file.name.replace(/\.(glb|gltf)$/i, '');
+  if (window.showSaveFilePicker) {
+    try {
+      const h = await window.showSaveFilePicker({
+        suggestedName: base + '.obj',
+        types: [{ description: 'Wavefront OBJ', accept: { 'text/plain': ['.obj'] } }],
+      });
+      const w = await h.createWritable();
+      await w.write(it.blob);
+      await w.close();
+      it.saveBtn.textContent = 'Saved';
+      setTimeout(() => { it.saveBtn.textContent = 'Save .obj'; }, 1500);
+      return;
+    } catch (err) {
+      if (err && err.name === 'AbortError') return;
+      // fall through to download
+    }
+  }
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(it.blob);
+  a.download = base + '.obj';
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 10000);
+}
+
+modesEl.addEventListener('click', (e) => {
+  const b = e.target.closest('button');
+  if (!b) return;
+  setMode(b.dataset.mode);
+});
+function setMode(mode) {
+  view.mode = mode;
+  for (const b of modesEl.querySelectorAll('button')) b.classList.toggle('on', b.dataset.mode === mode);
+  view.render();
+}
+
+window.addEventListener('keydown', (e) => {
+  if (e.target.tagName === 'INPUT') return;
+  const k = e.key.toLowerCase();
+  if (k === 'f') { view.fit(); view.render(); }
+  else if (k === 'w') setMode('wire');
+  else if (k === 's') setMode('solid');
+  else if (k === 'p') setMode('points');
+});
+
+document.getElementById('clear').onclick = () => {
+  for (const it of items) { if (it.blob) it.blob = null; it.cancelled = true; }
+  items.length = 0;
+  queueEl.innerHTML = '';
+  active = null;
+  view.setData(null);
+  hudEl.hidden = true;
+  emptyEl.hidden = false;
+};
 
 dropEl.addEventListener('click', () => {
   const inp = document.createElement('input');
   inp.type = 'file';
   inp.multiple = true;
-  inp.accept = '.glb,.gltf,.bin';
+  inp.accept = '.glb,.gltf,.bin,.wasm';
   inp.onchange = () => handleFiles(inp.files);
   inp.click();
 });
-['dragenter', 'dragover'].forEach((ev) => dropEl.addEventListener(ev, (e) => {
-  e.preventDefault(); dropEl.classList.add('over');
-}));
-['dragleave', 'drop'].forEach((ev) => dropEl.addEventListener(ev, (e) => {
-  e.preventDefault(); dropEl.classList.remove('over');
-}));
-dropEl.addEventListener('drop', (e) => handleFiles(e.dataTransfer.files));
-window.addEventListener('dragover', (e) => e.preventDefault());
-window.addEventListener('drop', (e) => { e.preventDefault(); handleFiles(e.dataTransfer.files); });
+document.addEventListener('dragenter', (e) => { e.preventDefault(); document.body.classList.add('over'); });
+document.addEventListener('dragover', (e) => e.preventDefault());
+document.addEventListener('dragleave', (e) => { if (!e.relatedTarget) document.body.classList.remove('over'); });
+document.addEventListener('drop', (e) => { e.preventDefault(); document.body.classList.remove('over'); handleFiles(e.dataTransfer.files); });
+colorsChk.addEventListener('change', () => { /* applies to the next conversion */ });
+new ResizeObserver(() => view.render()).observe(document.querySelector('section.view'));
+view.render();
 </script>
 </body>
 </html>

@@ -1,4 +1,5 @@
-build/
-*.exe
 node_modules/
 *.obj
+shot-*.png
+build/
+*.exe

@@ -1,69 +1,77 @@
 # glb2obj
 
-Web app + CLI that converts `.glb` / `.gltf` 3D models (point clouds and triangle meshes) to `.obj`.
+**One file: `glb2obj.html`. Double-click it.** Converts `.glb` / `.gltf` (point clouds and
+triangle meshes) to `.obj`, entirely in the browser — no server, no upload, no install,
+no dependencies.
 
-Zero dependencies — plain Node.js, no npm install needed.
+```
+open glb2obj.html          # or double-click it in Explorer
+drop a .glb / .gltf        # converts immediately, shows a 3D preview, then Save .obj
+```
 
-## Features
+Drag several files at once. A `.gltf` that references external buffers must be dropped
+**together with** its `.bin` file(s).
 
-- GLB and `.gltf` JSON input (embedded `data:` buffers; external buffer files via CLI)
-- Point-cloud primitives → `v` lines; indexed meshes → `v` + `f` lines
-- Normals (`NORMAL`) → `vn` lines in world space, faces as `f v/vn`
-- Vertex colors (`COLOR_0`) → `vc` lines (Blender extension), toggleable
-- Node hierarchy world transforms (translation / rotation / scale)
-- glTF normalization rules for int8/uint8/int16/uint16 accessors
-- Interleaved and dense accessors, all float/uint component types
+## What it does
 
-## Files
-
-| File | Purpose |
+| Input | OBJ output |
 | --- | --- |
-| `server.js` | HTTP server: serves UI, `POST /convert` (binds 127.0.0.1; `HOST`/`PORT` env) |
-| `lib/glb2obj.js` | GLB/gltf parser + OBJ writer |
-| `public/index.html` | Drag-and-drop UI (upload progress, colors toggle) |
-| `test.js` | Synthetic + real GLB tests |
-| `cli.js` | Command-line converter (batch mode) |
-| `build/build.js` | SEA exe build script |
+| point-cloud primitives (POSITION, no indices) | `v` lines |
+| indexed meshes | `v` + `f` lines (1-based, global index offset is correct across primitives) |
+| `NORMAL` | `vn` lines in world space, faces written as `f v/vn` |
+| `COLOR_0` | `vc` lines (Blender vertex-colour extension); untick *vertex colors* to skip |
+| node hierarchy | full world transforms applied (translation / rotation / scale, cycles guarded) |
+| all accessor types | int8/uint8/int16/uint16/uint32/float32, `normalized`, dense **and interleaved** (`byteStride`) |
+| `KHR_draco_mesh_compression_ext` | decoded (Draco decoder is fetched once, see below) |
 
-## CLI / GUI (exe)
+## Preview
 
-```bash
-glb2obj.exe              # GUI: starts local server, opens browser (drag & drop)
-glb2obj.exe model.glb -o out.obj   # CLI: converts directly
-glb2obj.exe a.glb b.gltf           # batch: each input -> <input>.obj
-glb2obj.exe model.glb --no-colors  # skip vc lines
+WebGL, hand-written, no three.js. **Solid** (uses the model's normals; generates them for
+preview when the file has none), **Wire** (edges decimated on dense meshes), **Points**
+(adaptive sprite size, vertex colours preserved). Ground grid + RGB axes, fit to bounds.
+
+* drag = orbit · wheel = zoom · right-drag / Shift-drag = pan
+* `F` fit · `W` wire · `S` solid · `P` points
+
+## Draco
+
+Draco-compressed models need Google's WASM decoder, which is deliberately **not** inlined
+(1.4 MB of base64 for a feature most files never use). On the first Draco model the page
+loads `draco_decoder_gltf.js` + `.wasm` from `https://www.gstatic.com/draco/...`.
+
+Offline: save `draco_decoder_gltf.js` and `draco_decoder_gltf.wasm` next to `glb2obj.html`,
+or drop both onto the page, then retry.
+
+## Deliberately not handled
+
+Textures/UVs are dropped (a warning states how many primitives had UVs), morph targets are
+dropped, skinning/bones export the bind pose, materials/`mtl` are not written, and no
+axis flip is applied (glTF is Y-up; the OBJ comes out Y-up). The status line always tells
+you what was left behind instead of failing silently.
+
+## Limits
+
+512 MB input, bounded memory: OBJ text is emitted in ≤1 MB chunks (never one giant
+`join`), conversion runs as a generator time-sliced at ~24 ms/frame so the tab stays
+responsive and cancellable on a 100 MB single-primitive mesh. Preview is capped and
+decimated at 4 M vertices / 1.5 M triangles — the OBJ is never decimated.
+
+## Development
+
+```
+node test.mjs                      # 21 checks, extracts the CORE block from the HTML
+node dev/make-fixtures.mjs         # regenerates fixtures/ (cube, point cloud, interleaved)
+node dev/make-draco-fixture.mjs    # regenerates fixtures/draco-bunny.glb (needs `npm i draco3dgltf`)
 ```
 
-Drag & drop a `.glb`/`.gltf` onto the exe = CLI convert. Double-click / no args = GUI.
+`test.mjs` is a dev harness only — the product has no dev dependencies. It is load-bearing:
 
-## CLI (node)
+* **Golden check**: output must be byte-identical to the pre-rewrite Node converter
+  (commit `71d8866`, read out of git history) on the 5 MB real-world model.
+* **Interleaved regression**: a `byteStride` test that fails if stride handling breaks.
+* **Generator granularity**: asserts a single 100 k-point primitive still yields ≥10 times.
+* **Draco**: real decoder decode of 34,834 verts / 69,451 faces, asserting decoded normals
+  are unit length (catches quantization mishandling).
 
-```bash
-node cli.js model.glb [-o output.obj] [--no-colors]
-```
-
-## Standalone exe (Node SEA)
-
-```bash
-node build/build.js   # Node 25.5+ required
-```
-
-## API
-
-```
-POST /convert?name=<base-filename>[&colors=0]
-Content-Type: application/octet-stream
-body: raw GLB bytes (or .gltf JSON text)
-
-200 → OBJ file (Content-Disposition: attachment)
-    X-Stats: {"points":N,"faces":N,"normals":N,"colors":N,"objects":N,"skippedPrimitives":N,"ms":N}
-400 → parse error message
-```
-
-Max upload size: 512 MB. Server binds to 127.0.0.1 by default (local tool); set `HOST=0.0.0.0` to expose on the network.
-
-## Tests
-
-```bash
-node test.js
-```
+Anything inside `/* ==== CORE BEGIN ==== */ ... CORE END ==== */` must stay free of DOM and
+Node APIs — that is what lets the same bytes run in the browser and under Node.
