@@ -1,0 +1,4 @@
+build/
+*.exe
+node_modules/
+*.obj

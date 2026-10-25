@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>GLB / glTF → OBJ Converter</title>
+<style>
+  :root {
+    --bg: #0f1117; --panel: #181c25; --border: #2a3040;
+    --text: #e6e9f0; --dim: #8a93a6; --accent: #4f8cff; --ok: #3ecf8e; --err: #ff5d5d;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; min-height: 100vh; display: flex; flex-direction: column;
+    align-items: center; justify-content: center;
+    background: var(--bg); color: var(--text);
+    font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+    padding: 24px;
+  }
+  h1 { font-size: 1.5rem; margin: 0 0 4px; }
+  .sub { color: var(--dim); margin: 0 0 28px; font-size: .9rem; }
+  .card {
+    background: var(--panel); border: 1px solid var(--border);
+    border-radius: 14px; padding: 28px; width: min(560px, 100%);
+    box-shadow: 0 12px 40px rgba(0,0,0,.4);
+  }
+  #drop {
+    border: 2px dashed var(--border); border-radius: 10px;
+    padding: 36px 20px; text-align: center; cursor: pointer;
+    transition: border-color .15s, background .15s; color: var(--dim);
+  }
+  #drop:hover, #drop.over { border-color: var(--accent); background: rgba(79,140,255,.06); color: var(--text); }
+  #drop .big { font-size: 1.05rem; color: var(--text); }
+  #file { display: none; }
+  .row { display: flex; align-items: center; gap: 10px; margin-top: 16px; }
+  label.chk { display: flex; align-items: center; gap: 8px; cursor: pointer; color: var(--dim); font-size: .9rem; }
+  input[type=checkbox] { accent-color: var(--accent); }
+  #progress { display: none; margin-top: 12px; height: 6px; border-radius: 3px; background: var(--border); overflow: hidden; }
+  #progressBar { height: 100%; width: 0; background: var(--accent); transition: width .1s; }
+  button {
+    margin-top: 18px; width: 100%; padding: 12px; font-size: 1rem; font-weight: 600;
+    color: #fff; background: var(--accent); border: 0; border-radius: 8px; cursor: pointer;
+    transition: opacity .15s;
+  }
+  button:disabled { opacity: .45; cursor: not-allowed; }
+  #status { margin-top: 14px; font-size: .9rem; min-height: 1.4em; }
+  #status.ok { color: var(--ok); }
+  #status.err { color: var(--err); }
+  .stats { margin-top: 10px; color: var(--dim); font-size: .85rem; }
+  .hint { margin-top: 18px; color: var(--dim); font-size: .8rem; text-align: center; }
+</style>
+</head>
+<body>
+  <h1>GLB / glTF → OBJ</h1>
+  <p class="sub">Point cloud and mesh 3D model converter</p>
+  <div class="card">
+    <div id="drop">
+      <div class="big">Drop a .glb or .gltf file here</div>
+      <div>or click to browse</div>
+    </div>
+    <input type="file" id="file" accept=".glb,.gltf">
+    <div class="row">
+      <label class="chk"><input type="checkbox" id="colors" checked> Include vertex colors (vc)</label>
+    </div>
+    <div id="progress"><div id="progressBar"></div></div>
+    <button id="convert" disabled>Convert to OBJ</button>
+    <div id="status"></div>
+    <div class="stats" id="stats"></div>
+  </div>
+  <p class="hint">Conversion runs on this server. Point clouds = GLB meshes with POSITION and no indices. Normals become vn lines; vertex colors become vc lines (Blender).</p>
+
+<script>
+const drop = document.getElementById('drop');
+const fileInput = document.getElementById('file');
+const convertBtn = document.getElementById('convert');
+const colorsChk = document.getElementById('colors');
+const statusEl = document.getElementById('status');
+const statsEl = document.getElementById('stats');
+const progressEl = document.getElementById('progress');
+const progressBar = document.getElementById('progressBar');
+let file = null;
+
+function setFile(f) {
+  if (!f || !/\.(glb|gltf)$/i.test(f.name)) {
+    statusEl.className = 'err';
+    statusEl.textContent = 'Please select a .glb or .gltf file';
+    return;
+  }
+  file = f;
+  convertBtn.disabled = false;
+  statusEl.className = '';
+  statusEl.textContent = '';
+  statsEl.textContent = '';
+  drop.querySelector('.big').textContent = f.name;
+  fileInput.value = '';
+}
+
+drop.addEventListener('click', () => fileInput.click());
+fileInput.addEventListener('change', () => { if (fileInput.files[0]) setFile(fileInput.files[0]); });
+
+['dragenter','dragover'].forEach(ev => drop.addEventListener(ev, e => {
+  e.preventDefault(); drop.classList.add('over');
+}));
+['dragleave','drop'].forEach(ev => drop.addEventListener(ev, e => {
+  e.preventDefault(); drop.classList.remove('over');
+}));
+drop.addEventListener('drop', e => {
+  const f = e.dataTransfer.files[0];
+  if (f) setFile(f);
+});
+// window-level drop so a miss on the box still works
+window.addEventListener('dragover', e => e.preventDefault());
+window.addEventListener('drop', e => {
+  e.preventDefault();
+  const f = e.dataTransfer.files[0];
+  if (f) setFile(f);
+});
+
+function fmtStats(stats) {
+  return (
+    `${stats.points?.toLocaleString()} vertices` +
+    (stats.faces ? `, ${stats.faces.toLocaleString()} faces` : '') +
+    (stats.normals ? `, ${stats.normals.toLocaleString()} normals` : '') +
+    (stats.colors ? `, ${stats.colors.toLocaleString()} colors` : '') +
+    (stats.skippedPrimitives ? `, ${stats.skippedPrimitives} primitives skipped` : '') +
+    ` · ${(stats.ms / 1000).toFixed(2)} s`
+  );
+}
+
+convertBtn.addEventListener('click', () => {
+  if (!file) return;
+  convertBtn.disabled = true;
+  statusEl.className = '';
+  statusEl.textContent = 'Converting…';
+  statsEl.textContent = '';
+  progressEl.style.display = 'block';
+  progressBar.style.width = '0%';
+
+  const name = file.name.replace(/\.(glb|gltf)$/i, '');
+  const params = new URLSearchParams({ name });
+  if (!colorsChk.checked) params.set('colors', '0');
+
+  const xhr = new XMLHttpRequest();
+  xhr.open('POST', '/convert?' + params.toString());
+  xhr.responseType = 'text';
+  xhr.upload.onprogress = (e) => {
+    if (e.lengthComputable) {
+      progressBar.style.width = Math.round(100 * e.loaded / e.total) + '%';
+      statusEl.textContent = `Uploading… ${Math.round(100 * e.loaded / e.total)}%`;
+    }
+  };
+  xhr.onload = () => {
+    progressEl.style.display = 'none';
+    if (xhr.status !== 200) {
+      statusEl.className = 'err';
+      statusEl.textContent = xhr.responseText || `HTTP ${xhr.status}`;
+      convertBtn.disabled = false;
+      return;
+    }
+    const stats = JSON.parse(xhr.getResponseHeader('X-Stats') || '{}');
+    const blob = new Blob([xhr.responseText], { type: 'text/plain' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = name + '.obj';
+    a.click();
+    URL.revokeObjectURL(a.href);
+    statusEl.className = 'ok';
+    statusEl.textContent = `Done — ${a.download} downloaded`;
+    statsEl.textContent = fmtStats(stats);
+    convertBtn.disabled = false;
+  };
+  xhr.onerror = () => {
+    progressEl.style.display = 'none';
+    statusEl.className = 'err';
+    statusEl.textContent = 'Network error — is the server still running?';
+    convertBtn.disabled = false;
+  };
+  xhr.send(file);
+});
+</script>
+</body>
+</html>
