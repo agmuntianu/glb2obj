@@ -1,0 +1,475 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>GLB / glTF → OBJ</title>
+<style>
+  body { font: 15px system-ui, sans-serif; background: #0f1117; color: #e6e9f0; margin: 0; padding: 24px; }
+  #drop { border: 2px dashed #2a3040; border-radius: 10px; padding: 40px; text-align: center; }
+  #log { font: 13px ui-monospace, monospace; white-space: pre-wrap; margin-top: 16px; }
+</style>
+</head>
+<body>
+<h1>GLB / glTF → OBJ</h1>
+<div id="drop">Drop .glb / .gltf files here</div>
+<label><input type="checkbox" id="colors" checked> vertex colors (vc)</label>
+<div id="log"></div>
+
+<script>
+/* ==== CORE BEGIN ==== */
+// GLB / glTF -> OBJ. No deps, no Node, no DOM: Uint8Array / DataView only,
+// so this exact block also runs in Node for tests.
+//
+// GLB: 12-byte header, JSON chunk (0x4E4F534A), BIN chunk (0x004E4942).
+// Output: point clouds -> v ; indexed meshes -> v + f ; NORMAL -> vn ; COLOR_0 -> vc.
+
+const GLB_MAGIC = 0x46546c67;
+const CHUNK_JSON = 0x4e4f534a;
+const CHUNK_BIN = 0x004e4942;
+
+const COMPONENT = {
+  5120: { size: 1, read: 'getInt8', norm: 'int8' },
+  5121: { size: 1, read: 'getUint8', norm: 'uint8' },
+  5122: { size: 2, read: 'getInt16', norm: 'int16' },
+  5123: { size: 2, read: 'getUint16', norm: 'uint16' },
+  5125: { size: 4, read: 'getUint32' },
+  5126: { size: 4, read: 'getFloat32' },
+};
+
+class GlbError extends Error {}
+
+function base64ToBytes(b64) {
+  const bin = atob(b64);
+  const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+  return out;
+}
+
+function parseGlb(buf) {
+  if (buf.byteLength < 20) throw new GlbError('File too small to be a GLB');
+  const head = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
+  if (head.getUint32(0, true) !== GLB_MAGIC) throw new GlbError('Not a GLB file (bad magic)');
+  const version = head.getUint32(4, true);
+  if (version !== 2) throw new GlbError('Unsupported GLB container version ' + version);
+  const totalLength = head.getUint32(8, true);
+  if (totalLength > buf.byteLength) throw new GlbError('Truncated GLB file');
+
+  const gltf = { buffers: [] };
+  let bin = null;
+  let offset = 12;
+  while (offset < totalLength) {
+    const chunkLen = head.getUint32(offset, true);
+    const chunkType = head.getUint32(offset + 4, true);
+    const data = buf.subarray(offset + 8, offset + 8 + chunkLen);
+    if (chunkType === CHUNK_JSON) {
+      Object.assign(gltf, JSON.parse(new TextDecoder('utf-8').decode(data)));
+    } else if (chunkType === CHUNK_BIN) {
+      bin = data;
+    }
+    offset += 8 + chunkLen;
+  }
+  if (gltf.scene === undefined && !gltf.meshes && !gltf.nodes) throw new GlbError('GLB has no scene content');
+  return { gltf, bin };
+}
+
+function isGltfJson(input) {
+  if (typeof input === 'string') return input.trimStart().startsWith('{');
+  for (let i = 0; i < Math.min(input.byteLength, 64); i++) {
+    const b = input[i];
+    if (b === 0x7b || b === 0x5b) return true;
+    if (b > 0x20 && b < 0x7f) return false;
+  }
+  return false;
+}
+
+/**
+ * Buffer resolver: GLB BIN chunk, data: URIs, and (browser) sidecar files the
+ * user dropped alongside a .gltf, matched by name.
+ */
+function makeBufferResolver(gltf, bin, sidecars) {
+  const cache = new Map();
+  return (bufferIndex) => {
+    if (cache.has(bufferIndex)) return cache.get(bufferIndex);
+    const buffer = gltf.buffers[bufferIndex];
+    if (!buffer) throw new GlbError('Missing buffer definition');
+    let data;
+    if (buffer.uri === undefined) {
+      if (!bin) throw new GlbError('Buffer without uri but no BIN chunk present');
+      data = bin;
+    } else if (buffer.uri.startsWith('data:')) {
+      data = base64ToBytes(buffer.uri.slice(buffer.uri.indexOf(',') + 1));
+    } else {
+      const name = buffer.uri.split('/').pop().split('?')[0].toLowerCase();
+      const found = sidecars && sidecars.get(name);
+      if (!found) {
+        throw new GlbError(
+          'This .gltf references external buffer "' + buffer.uri +
+          '". Drop the .gltf and its .bin file(s) together in one drop.');
+      }
+      data = found;
+    }
+    cache.set(bufferIndex, data);
+    return data;
+  };
+}
+
+function getViewData(gltf, getBuffer, bvIndex) {
+  const bv = gltf.bufferViews[bvIndex];
+  if (!bv) throw new GlbError('Missing bufferView');
+  const data = getBuffer(bv.buffer);
+  const byteOffset = bv.byteOffset || 0;
+  const end = byteOffset + (bv.byteLength || 0);
+  if (end > data.byteLength) {
+    throw new GlbError('bufferView ' + bvIndex + ' out of bounds (needs ' + end + ' bytes, buffer has ' + data.byteLength + ')');
+  }
+  return new Uint8Array(data.buffer, data.byteOffset + byteOffset, bv.byteLength);
+}
+
+const TYPE_COMPONENTS = { SCALAR: 1, VEC2: 2, VEC3: 3, VEC4: 4, MAT2: 4, MAT3: 9, MAT4: 16 };
+
+function readAccessor(gltf, getBuffer, accessorIndex) {
+  const acc = gltf.accessors[accessorIndex];
+  if (!acc) throw new GlbError('Missing accessor');
+  const comp = COMPONENT[acc.componentType];
+  if (!comp) throw new GlbError('Unsupported componentType ' + acc.componentType);
+  const bvDef = gltf.bufferViews[acc.bufferView];
+  if (!bvDef) throw new GlbError('Missing bufferView');
+  const bv = getViewData(gltf, getBuffer, acc.bufferView);
+  const byteOffset = acc.byteOffset || 0;
+  const numComponents = TYPE_COMPONENTS[acc.type];
+  if (!numComponents) throw new GlbError('Unsupported accessor type ' + acc.type);
+  // byteStride lives on the bufferView *definition*, not on the byte view.
+  // The Node version read bv.bytesPerElement off the Uint8Array (a field that
+  // does not exist, on an object that is not the definition), so every
+  // interleaved buffer fell back to dense stride and came out scrambled.
+  const stride = bvDef.byteStride || comp.size * numComponents;
+  const view = new DataView(bv.buffer, bv.byteOffset, bv.byteLength);
+  const needed = byteOffset + (acc.count - 1) * stride + numComponents * comp.size;
+  if (needed > bv.byteLength) {
+    throw new GlbError('accessor ' + accessorIndex + ' out of bounds (needs ' + needed + ' bytes, view has ' + bv.byteLength + ')');
+  }
+  const out = new Float64Array(acc.count * numComponents);
+  const read = comp.read;
+  for (let i = 0; i < acc.count; i++) {
+    const base = byteOffset + i * stride;
+    for (let c = 0; c < numComponents; c++) {
+      const off = base + c * comp.size;
+      let v;
+      if (read === 'getFloat32') v = view.getFloat32(off, true);
+      else if (read === 'getUint32') v = view.getUint32(off, true);
+      else if (read === 'getUint16') v = view.getUint16(off, true);
+      else if (read === 'getInt16') v = view.getInt16(off, true);
+      else if (read === 'getUint8') v = view.getUint8(off);
+      else v = view.getInt8(off);
+      if (acc.normalized) {
+        switch (comp.norm) {
+          case 'int8': v = (v + 128) / 128 - 1; break;
+          case 'int16': v = v / 32768; break;
+          case 'uint8': v = v / 255; break;
+          case 'uint16': v = v / 65535; break;
+        }
+      }
+      out[i * numComponents + c] = v;
+    }
+  }
+  return out;
+}
+
+// ---- 4x4 matrices, column-major (glTF convention) ----
+
+function matTRS(translation, rotation, scale) {
+  const [tx, ty, tz] = translation || [0, 0, 0];
+  const [sx, sy, sz] = scale || [1, 1, 1];
+  const [x, y, z, w] = rotation || [0, 0, 0, 1];
+  const x2 = x + x, y2 = y + y, z2 = z + z;
+  const xx = x * x2, yy = y * y2, zz = z * z2;
+  const xy = x * y2, xz = x * z2, yz = y * z2;
+  const wx = w * x2, wy = w * y2, wz = w * z2;
+  return [
+    (1 - (yy + zz)) * sx, (xy + wz) * sx, (xz - wy) * sx, 0,
+    (xy - wz) * sy, (1 - (xx + zz)) * sy, (yz + wx) * sy, 0,
+    (xz + wy) * sz, (yz - wx) * sz, (1 - (xx + yy)) * sz, 0,
+    tx, ty, tz, 1,
+  ];
+}
+
+function matMul(a, b) {
+  const out = new Array(16).fill(0);
+  for (let col = 0; col < 4; col++) {
+    for (let row = 0; row < 4; row++) {
+      out[col * 4 + row] =
+        a[row] * b[col * 4] + a[4 + row] * b[col * 4 + 1] +
+        a[8 + row] * b[col * 4 + 2] + a[12 + row] * b[col * 4 + 3];
+    }
+  }
+  return out;
+}
+
+function normalMatrix(m) {
+  const a = m[0], d = m[1], g = m[2], b = m[4], e = m[5], h = m[6], c = m[8], f = m[9], i = m[10];
+  const det = a * (e * i - f * h) - b * (d * i - f * g) + c * (d * h - e * g);
+  if (Math.abs(det) < 1e-30) return [1, 0, 0, 0, 1, 0, 0, 0, 1];
+  const inv = 1 / det;
+  return [
+    (e * i - f * h) * inv, (c * h - b * i) * inv, (b * f - c * e) * inv,
+    (e * g - d * h) * inv, (a * i - a * g) * inv, (c * d - a * f) * inv,
+    (d * h - e * g) * inv, (c * g - b * h) * inv, (a * e - b * d) * inv,
+  ];
+}
+
+const IDENTITY = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1];
+
+function nodeWorldMatrices(gltf) {
+  const nodes = gltf.nodes || [];
+  const world = new Array(nodes.length);
+  const seen = new Set();
+  function walk(index, parent) {
+    if (seen.has(index)) return; // guard malformed/cyclic hierarchies
+    seen.add(index);
+    const node = nodes[index];
+    const local = node ? matTRS(node.translation, node.rotation, node.scale) : IDENTITY;
+    world[index] = matMul(parent, local);
+    ((node && node.children) || []).forEach((c) => walk(c, world[index]));
+  }
+  let root = gltf.scene !== undefined ? ((gltf.scenes[gltf.scene] || {}).nodes || []) : [];
+  if (!root.length) root = nodes.map((_, i) => i);
+  root.forEach((i) => walk(i, IDENTITY));
+  return world;
+}
+
+function fmtNum(v) {
+  if (Math.abs(v) < 1e-9) return '0';
+  return String(Number(v.toPrecision(8)));
+}
+
+/**
+ * Convert GLB bytes (or glTF JSON) to OBJ, streamed in chunks.
+ * @param {Uint8Array|string} input
+ * @param {object} [options]
+ * @param {boolean} [options.includeColors=true]
+ * @param {Map<string,Uint8Array>} [options.sidecars] external .bin by lowercase filename
+ * @param {(chunk:string)=>void} [options.onChunk] OBJ text arrives in pieces
+ * @param {boolean} [options.collectPreview=false] gather geometry for WebGL
+ * @returns {{obj:string|null, preview:object|null, stats:object}}
+ */
+function convertToObj(input, options) {
+  const opts = options || {};
+  const includeColors = opts.includeColors !== false;
+  const wantObj = typeof opts.onChunk === 'function' || opts.collectObj !== false;
+
+  let gltf, bin = null;
+  if (isGltfJson(input)) {
+    gltf = typeof input === 'string' ? JSON.parse(input) : JSON.parse(new TextDecoder('utf-8').decode(input));
+  } else {
+    ({ gltf, bin } = parseGlb(input));
+  }
+  const getBuffer = makeBufferResolver(gltf, bin, opts.sidecars);
+  const world = nodeWorldMatrices(gltf);
+
+  // --- streaming text writer ---
+  const objParts = wantObj && opts.onChunk === undefined ? [] : null;
+  let textBuf = [];
+  let textChars = 0;
+  const FLUSH_CHARS = 1 << 20;
+  function emitLine(line) {
+    if (!wantObj) return;
+    textBuf.push(line);
+    textChars += line.length + 1;
+    if (textChars >= FLUSH_CHARS) flushLines();
+  }
+  function flushLines() {
+    if (!wantObj || !textBuf.length) return;
+    const chunk = textBuf.join('\n') + '\n';
+    textBuf = [];
+    textChars = 0;
+    if (opts.onChunk) opts.onChunk(chunk);
+    else objParts.push(chunk);
+  }
+  emitLine('# Converted from GLB by glb2obj');
+
+  let totalPoints = 0, totalFaces = 0, totalNormals = 0, totalColors = 0;
+  let skippedPrimitives = 0, objects = 0;
+
+  // --- preview geometry ---
+  const pvVerts = [];   // Float32Array per object
+  const pvEdges = [];   // Uint32Array line-list per object (triangle edges)
+  const pvColors = [];
+  const PREVIEW_CAP = 2000000; // vertices
+  let previewCount = 0;
+  let previewTruncated = false;
+
+  const nodes = gltf.nodes || [];
+  for (let nodeIndex = 0; nodeIndex < nodes.length; nodeIndex++) {
+    const node = nodes[nodeIndex];
+    if (node.mesh === undefined) continue;
+    const mesh = gltf.meshes[node.mesh];
+    if (!mesh) continue;
+    const name = (node.name || mesh.name || 'object_' + nodeIndex).replace(/[^\w.-]/g, '_');
+
+    emitLine('o ' + name);
+    objects++;
+
+    const m = world[nodeIndex] || IDENTITY;
+    const n = normalMatrix(m);
+    const m0 = m[0], m1 = m[1], m2 = m[2], m4 = m[4], m5 = m[5], m6 = m[6],
+          m8 = m[8], m9 = m[9], m10 = m[10], m12 = m[12], m13 = m[13], m14 = m[14];
+    const n0 = n[0], n1 = n[1], n2 = n[2], n3 = n[3], n4 = n[4],
+          n5 = n[5], n6 = n[6], n7 = n[7], n8 = n[8];
+
+    for (let primIndex = 0; primIndex < mesh.primitives.length; primIndex++) {
+      const primitive = mesh.primitives[primIndex];
+      const posAttr = primitive.attributes ? primitive.attributes.POSITION : undefined;
+      if (posAttr === undefined) { skippedPrimitives++; continue; }
+
+      const positions = readAccessor(gltf, getBuffer, posAttr);
+      const count = positions.length / 3;
+      const primVertBase = totalPoints;
+      const primNormalBase = totalNormals;
+
+      const hasNormals = primitive.attributes && primitive.attributes.NORMAL !== undefined;
+      const normals = hasNormals ? readAccessor(gltf, getBuffer, primitive.attributes.NORMAL) : null;
+      const colorAttr = includeColors && primitive.attributes ? primitive.attributes.COLOR_0 : undefined;
+      const colors = colorAttr !== undefined ? readAccessor(gltf, getBuffer, colorAttr) : null;
+      const colorComponents = colors ? colors.length / count : 0;
+
+      emitLine('g ' + name + '_p' + (primIndex + 1));
+
+      const wantPv = opts.collectPreview && previewCount < PREVIEW_CAP;
+      const pvN = wantPv ? Math.min(count, PREVIEW_CAP - previewCount) : 0;
+      const pvPos = wantPv ? new Float32Array(pvN * 3) : null;
+      const pvCol = wantPv && colors ? new Float32Array(pvN * 3) : null;
+      if (wantPv && count > pvN) previewTruncated = true;
+
+      for (let i = 0; i < count; i++) {
+        const o3 = i * 3;
+        const px = positions[o3], py = positions[o3 + 1], pz = positions[o3 + 2];
+        const wx = m0 * px + m4 * py + m8 * pz + m12;
+        const wy = m1 * px + m5 * py + m9 * pz + m13;
+        const wz = m2 * px + m6 * py + m10 * pz + m14;
+        emitLine('v ' + fmtNum(wx) + ' ' + fmtNum(wy) + ' ' + fmtNum(wz));
+        if (hasNormals) {
+          emitLine('vn ' +
+            fmtNum(n0 * normals[o3] + n3 * normals[o3 + 1] + n6 * normals[o3 + 2]) + ' ' +
+            fmtNum(n1 * normals[o3] + n4 * normals[o3 + 1] + n7 * normals[o3 + 2]) + ' ' +
+            fmtNum(n2 * normals[o3] + n5 * normals[o3 + 1] + n8 * normals[o3 + 2]));
+          totalNormals++;
+        }
+        if (colors) {
+          const oc = i * colorComponents;
+          let vc = 'vc';
+          for (let c = 0; c < colorComponents; c++) {
+            vc += ' ' + fmtNum(Math.max(0, Math.min(1, colors[oc + c])));
+          }
+          emitLine(vc);
+          totalColors++;
+        }
+        totalPoints++;
+
+        if (pvPos && i < pvN) {
+          pvPos[i * 3] = wx; pvPos[i * 3 + 1] = wy; pvPos[i * 3 + 2] = wz;
+          if (pvCol) {
+            const oc = i * colorComponents;
+            for (let c = 0; c < 3; c++) pvCol[i * 3 + c] = colors ? Math.max(0, Math.min(1, colors[oc + c])) : 1;
+          }
+        }
+      }
+      if (pvPos) {
+        pvVerts.push(pvPos);
+        if (pvCol) pvColors.push(pvCol);
+        previewCount += pvN;
+      }
+
+      if (primitive.indices !== undefined) {
+        const idx = readAccessor(gltf, getBuffer, primitive.indices);
+        const vOff = primVertBase + 1;
+        const nOff = primNormalBase + 1 - vOff;
+        const wantPvEdges = opts.collectPreview && pvPos;
+        const pvIdx = wantPvEdges ? new Uint32Array(Math.min(idx.length, 6000000)) : null;
+        for (let i = 0; i + 2 < idx.length; i += 3) {
+          const a = idx[i] + vOff, b = idx[i + 1] + vOff, c = idx[i + 2] + vOff;
+          if (hasNormals) emitLine('f ' + a + '/' + (a + nOff) + ' ' + b + '/' + (b + nOff) + ' ' + c + '/' + (c + nOff));
+          else emitLine('f ' + a + ' ' + b + ' ' + c);
+          totalFaces++;
+          if (pvIdx) {
+            pvIdx[i] = idx[i]; pvIdx[i + 1] = idx[i + 1]; pvIdx[i + 2] = idx[i + 2];
+          }
+        }
+        if (pvIdx) pvEdges.push({ index: pvIdx.subarray(0, (idx.length / 3 | 0) * 3), base: primVertBase });
+      }
+    }
+  }
+
+  if (totalPoints === 0) throw new GlbError('No geometry found (need meshes with POSITION attribute)');
+  flushLines();
+
+  return {
+    obj: objParts ? objParts.join('') : null,
+    preview: opts.collectPreview ? { verts: pvVerts, colors: pvColors, edges: pvEdges, truncated: previewTruncated } : null,
+    stats: { points: totalPoints, faces: totalFaces, normals: totalNormals, colors: totalColors, objects, skippedPrimitives },
+  };
+}
+/* ==== CORE END ==== */
+
+// ---- UI ----
+const dropEl = document.getElementById('drop');
+const logEl = document.getElementById('log');
+const colorsChk = document.getElementById('colors');
+
+function log(msg) { logEl.textContent += msg + '\n'; }
+
+async function handleFiles(files) {
+  const list = Array.from(files);
+  const sidecars = new Map();
+  const models = [];
+  for (const f of list) {
+    if (/\.(glb|gltf)$/i.test(f.name)) models.push(f);
+    else if (/\.bin$/i.test(f.name)) sidecars.set(f.name.toLowerCase(), new Uint8Array(await f.arrayBuffer()));
+  }
+  if (!models.length) { log('No .glb/.gltf in drop'); return; }
+  for (const f of models) {
+    const t0 = performance.now();
+    const data = new Uint8Array(await f.arrayBuffer());
+    const parts = [];
+    try {
+      const res = convertToObj(data, {
+        includeColors: colorsChk.checked,
+        sidecars,
+        onChunk: (c) => parts.push(c),
+      });
+      const blob = new Blob(parts, { type: 'text/plain' });
+      const base = f.name.replace(/\.(glb|gltf)$/i, '');
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = base + '.obj';
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+      const s = res.stats;
+      log(base + ': ' + s.points.toLocaleString() + ' verts, ' + s.faces.toLocaleString() + ' faces in ' +
+        Math.round(performance.now() - t0) + ' ms -> saved');
+    } catch (err) {
+      log('ERROR ' + f.name + ': ' + err.message);
+    }
+  }
+}
+
+dropEl.addEventListener('click', () => {
+  const inp = document.createElement('input');
+  inp.type = 'file';
+  inp.multiple = true;
+  inp.accept = '.glb,.gltf,.bin';
+  inp.onchange = () => handleFiles(inp.files);
+  inp.click();
+});
+['dragenter', 'dragover'].forEach((ev) => dropEl.addEventListener(ev, (e) => {
+  e.preventDefault(); dropEl.classList.add('over');
+}));
+['dragleave', 'drop'].forEach((ev) => dropEl.addEventListener(ev, (e) => {
+  e.preventDefault(); dropEl.classList.remove('over');
+}));
+dropEl.addEventListener('drop', (e) => handleFiles(e.dataTransfer.files));
+window.addEventListener('dragover', (e) => e.preventDefault());
+window.addEventListener('drop', (e) => { e.preventDefault(); handleFiles(e.dataTransfer.files); });
+</script>
+</body>
+</html>
